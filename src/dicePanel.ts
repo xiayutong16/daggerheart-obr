@@ -1,5 +1,5 @@
 import { el, clear } from './dom';
-import { rollDuality, rollPolyhedral, rollBinary, OUTCOME_LABEL, OUTCOME_DESC } from './dice';
+import { rollDuality, rollPolyhedral, OUTCOME_LABEL, OUTCOME_DESC } from './dice';
 import { TRAITS } from './data/classes';
 import type { DualityResult } from './types';
 
@@ -7,12 +7,12 @@ export function renderDicePanel(root: HTMLElement) {
   clear(root);
 
   // ---- sub tab state ----
-  let sub: 'duality' | 'poly' = 'duality';
+  let sub: 'duality' | 'poly' = 'poly';
 
   const subBar = el('div', { class: 'subtabs' });
-  const dualityBtn = el('button', { class: 'subtab active', onclick: () => { sub = 'duality'; refresh(); } }, '二元骰 · 希望/恐惧');
-  const polyBtn = el('button', { class: 'subtab', onclick: () => { sub = 'poly'; refresh(); } }, '多面骰 · 标准');
-  subBar.append(dualityBtn, polyBtn);
+  const polyBtn = el('button', { class: 'subtab active', onclick: () => { sub = 'poly'; refresh(); } }, '多面骰 · 标准');
+  const dualityBtn = el('button', { class: 'subtab', onclick: () => { sub = 'duality'; refresh(); } }, '二元骰 · 希望/恐惧');
+  subBar.append(polyBtn, dualityBtn);
 
   const body = el('div', { class: 'panel-body' });
 
@@ -155,24 +155,14 @@ function polyView() {
     resultBox.append(calc);
   }
 
-  function doBinary() {
-    const b = rollBinary();
-    clear(resultBox);
-    const diceRow = el('div', { class: 'dice-row' });
-    diceRow.append(dieBox('二元 d2', b.label, 'plain'));
-    resultBox.append(diceRow);
-    resultBox.append(el('div', { class: 'calc' }, el('div', { class: 'calc-total' }, `结果：${b.label} (${b.value})`)));
-  }
-
   wrap.append(
-    el('p', { class: 'hint' }, '标准多面骰投掷；也可投掷真正的二元骰 (d2：真/假)。'),
+    el('p', { class: 'hint' }, '标准多面骰投掷（d4–d100，可设数量与调整值）。'),
     field('骰面', sidesSel),
     field('数量', countInput),
     field('调整值', modInput),
     el('div', { class: 'btn-row' },
       el('button', { class: 'btn primary', onclick: doRoll }, '🎲 投掷'),
       el('button', { class: 'btn', onclick: doRoll }, '↻ 再掷'),
-      el('button', { class: 'btn ghost', onclick: doBinary }, '🪙 二元 d2'),
     ),
     resultBox,
   );
