@@ -7,7 +7,7 @@ export default defineConfig({
   base: './',
   plugins: [viteSingleFile()],
   build: {
-    outDir: 'dist',
+    outDir: 'docs',
     assetsInlineLimit: 100000000,
     chunkSizeWarningLimit: 100000000,
     cssCodeSplit: false,
