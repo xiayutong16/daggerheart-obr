@@ -1,13 +1,55 @@
-import { el, clear } from './dom';
-import { rollDuality, rollPolyhedral, OUTCOME_LABEL, OUTCOME_DESC } from './dice';
+import { el, clear, appendAll } from './dom';
+import {
+  rollDuality,
+  rollPolyhedral,
+  QUADRANTS,
+  CRITICAL_INFO,
+  quadrantFor,
+  quadrantInfo,
+  pickSub,
+} from './dice';
 import { TRAITS } from './data/classes';
-import type { DualityResult } from './types';
+import { loadChar } from './characterPanel';
+import { appState } from './state';
+import { playSfx } from './sound';
+import { animateDice } from './diceAnim';
+import { castDiceToTable } from './tableDice';
+import {
+  autoSettleOn,
+  setAutoSettle,
+  tableDiceOn,
+  setTableDice,
+  gainHope,
+  gainFear,
+  getFear,
+  HOPE_MAX,
+  FEAR_MAX,
+} from './settle';
+import {
+  rollLog,
+  onRollLogChange,
+  pushRoll,
+  resetRollLogListeners,
+  setLocalRole,
+  newId,
+} from './rollLog';
+import { getForced, setForced, takeForced, isPersisted, FORCE_MIN, FORCE_MAX } from './force';
+import { fearBoard, refreshFearBoards } from './fearBoard';
+import { getDifficulty, setDifficulty, onDifficulty } from './difficulty';
+import type { DualityResult, Quadrant, Role } from './types';
 
-export function renderDicePanel(root: HTMLElement) {
+/** Live subscription to the GM's shared difficulty (one panel exists at a time). */
+let offDiff: (() => void) | null = null;
+
+export function renderDicePanel(root: HTMLElement, role: Role) {
   clear(root);
+  resetRollLogListeners();
+  setLocalRole(role);
 
   // ---- sub tab state ----
-  let sub: 'duality' | 'poly' = 'poly';
+  // `?sub=duality` only matters for local previews/debugging inside a plain browser.
+  let sub: 'poly' | 'duality' =
+    new URLSearchParams(location.search).get('sub') === 'duality' ? 'duality' : 'poly';
 
   const subBar = el('div', { class: 'subtabs' });
   const polyBtn = el('button', { class: 'subtab active', onclick: () => { sub = 'poly'; refresh(); } }, '多面骰 · 标准');
@@ -15,16 +57,22 @@ export function renderDicePanel(root: HTMLElement) {
   subBar.append(polyBtn, dualityBtn);
 
   const body = el('div', { class: 'panel-body' });
+  const logSlot = el('div');
 
   function refresh() {
-    dualityBtn.className = 'subtab' + (sub === 'duality' ? ' active' : '');
     polyBtn.className = 'subtab' + (sub === 'poly' ? ' active' : '');
+    dualityBtn.className = 'subtab' + (sub === 'duality' ? ' active' : '');
+    resetRollLogListeners();
     clear(body);
-    if (sub === 'duality') body.append(dualityView());
-    else body.append(polyView());
+    body.append(sub === 'poly' ? polyView(role) : dualityView(role));
+
+    clear(logSlot);
+    logSlot.append(rollLogView(role));
   }
 
-  root.append(subBar, body);
+  root.append(subBar, body, logSlot);
+  // The GM's Fear board sits above the tabs so it stays visible on both dice views.
+  if (role === 'GM') root.prepend(fearBoard());
   refresh();
 }
 
@@ -35,73 +83,469 @@ function dieBox(label: string, value: number | string, kind: 'hope' | 'fear' | '
   );
 }
 
-function dualityView() {
+/** The canvas stage shown while the dice tumble. */
+function diceStage() {
+  const canvas = el('canvas', { class: 'dice-stage' }) as HTMLCanvasElement;
+  const wrap = el('div', { class: 'dice-stage-wrap' }, canvas);
+  return { wrap, canvas };
+}
+
+/**
+ * Keep the settled dice on screen for a moment before folding the stage away, so
+ * the table actually gets to read the numbers instead of watching them vanish.
+ */
+function holdStage(wrap: HTMLElement, ms: number) {
+  window.setTimeout(() => {
+    if (!wrap.isConnected) return;
+    wrap.classList.add('stage-out');
+    window.setTimeout(() => wrap.remove(), 480);
+  }, ms);
+}
+
+/** A d20 that came up 20 (or 1) — gets its own sound and badge. */
+function polyNat(sides: number, rolls: number[]): 'nat20' | 'nat1' | null {
+  if (sides !== 20) return null;
+  if (rolls.includes(20)) return 'nat20';
+  if (rolls.length && rolls.every((v) => v === 1)) return 'nat1';
+  return null;
+}
+
+interface ForcePanel {
+  node: HTMLElement;
+  /** Re-render the status line; `clearInput` also wipes the box after a roll used it. */
+  refresh: (clearInput?: boolean) => void;
+  /** The roll happened, but its dice were too small to use the pending value. */
+  notifySkipped: (sides: number) => void;
+}
+
+/**
+ * GM-only "指定点数" control. The value is kept on this machine only and is never
+ * broadcast, so the players' panels have no idea it exists.
+ */
+function forcePanel(): ForcePanel {
+  const input = el('input', {
+    class: 'input force-input',
+    type: 'number',
+    min: String(FORCE_MIN),
+    max: String(FORCE_MAX),
+    placeholder: '例如 20',
+  }) as HTMLInputElement;
+  const note = el('div', { class: 'force-note' });
+  const setBtn = el('button', { class: 'btn-mini' }, '设定');
+  const clrBtn = el('button', { class: 'btn-mini ghost' }, '清除');
+  const box = el('div', { class: 'force-box' });
+
+  const current = getForced();
+  if (current != null) input.value = String(current);
+
+  let skipTimer = 0;
+
+  function pendingText(v: number): string {
+    const tail = isPersisted() ? '（用掉即失效 · 面数不够则保留）' : '（仅本页会话有效 · 本地存档被浏览器拦截）';
+    return `⏳ 待生效：下一次 d${v} 及以上的骰子必出 ${v}${tail}`;
+  }
+
+  function flash() {
+    box.classList.remove('flash');
+    void box.offsetWidth; // restart the animation
+    box.classList.add('flash');
+  }
+
+  function refresh(clearInput = false) {
+    clearTimeout(skipTimer);
+    const v = getForced();
+    if (v == null) {
+      if (clearInput) input.value = '';
+      note.textContent = clearInput ? '✔ 已用于刚才那一次投掷 · 现在回到随机' : '未设定 · 骰子正常随机';
+      note.className = 'force-note' + (clearInput ? ' ok' : '');
+      clrBtn.disabled = true;
+    } else {
+      note.textContent = pendingText(v);
+      note.className = 'force-note on';
+      clrBtn.disabled = false;
+    }
+  }
+
+  function apply() {
+    const raw = input.value.trim();
+    if (!raw) {
+      note.textContent = `先填一个点数（${FORCE_MIN}–${FORCE_MAX}）再点设定`;
+      note.className = 'force-note err';
+      input.focus();
+      return;
+    }
+    const v = Math.round(Number(raw));
+    if (!Number.isFinite(v) || v < FORCE_MIN || v > FORCE_MAX) {
+      note.textContent = `只能填 ${FORCE_MIN}–${FORCE_MAX} 之间的整数，例如 20`;
+      note.className = 'force-note err';
+      return;
+    }
+    input.value = String(v);
+    setForced(v);
+    playSfx('click');
+    refresh();
+    flash();
+  }
+
+  setBtn.addEventListener('click', apply);
+  clrBtn.addEventListener('click', () => {
+    setForced(null);
+    input.value = '';
+    playSfx('click');
+    refresh();
+  });
+  input.addEventListener('keydown', (e) => {
+    if ((e as KeyboardEvent).key === 'Enter') apply();
+  });
+  input.addEventListener('input', () => {
+    const empty = input.value.trim() === '';
+    setBtn.classList.toggle('ready', !empty);
+  });
+
+  refresh();
+  appendAll(box,
+    el('div', { class: 'force-head' }, '🎯 指定点数 · 仅 GM 本机可见'),
+    el('div', { class: 'force-row' }, input, setBtn, clrBtn),
+    note,
+    el('div', { class: 'force-hint' },
+      '填好点数后点「设定」（或按回车）。只作用于你这台机器上的下一次投掷，玩家端完全看不到；' +
+      '面数不足时（例如设 20 却投 d12）不消耗设定。'),
+  );
+  setBtn.classList.toggle('ready', input.value.trim() !== '');
+
+  return {
+    node: box,
+    refresh,
+    notifySkipped(sides: number) {
+      const v = getForced();
+      if (v == null) return;
+      note.textContent = `⚠ 本次骰面只有 d${sides}，出不了 ${v} —— 设定保留，等下一次 d${v} 及以上`;
+      note.className = 'force-note warn';
+      clearTimeout(skipTimer);
+      skipTimer = window.setTimeout(() => refresh(), 4200);
+    },
+  };
+}
+
+// ---------------------------------------------------------------- duality
+
+function dualityView(role: Role) {
+  const isGM = role === 'GM';
   const wrap = el('div');
 
-  const traitSel = el('select', { class: 'input' }) as HTMLSelectElement;
-  traitSel.append(el('option', { value: '' }, '— 选择属性 —'));
-  for (const t of TRAITS) traitSel.append(el('option', { value: t.zh }, `${t.zh} ${t.en}`));
+  // Character sheet linkage — a player's trait values come straight from their own sheet.
+  const sheet = loadChar();
 
-  const modInput = el('input', { class: 'input', type: 'number', value: '0', step: '1' }) as HTMLInputElement;
+  const traitSel = el('select', { class: 'input' });
+  traitSel.append(el('option', { value: '' }, '— 不联动（手动填调整值）—'));
+  for (const t of TRAITS) {
+    const v = sheet.traits[t.zh] ?? 0;
+    traitSel.append(el('option', { value: t.zh }, `${t.zh} ${t.en}　${v >= 0 ? '+' : ''}${v}`));
+  }
 
-  const rollWith = el('select', { class: 'input' }) as HTMLSelectElement;
+  const modInput = el('input', { class: 'input', type: 'number', value: '0', step: '1' });
+  const linkNote = el('div', { class: 'link-note' }, '');
+
+  // ---- experiences: a relevant experience adds +2 to the roll ----
+  const expList = sheet.experiences ?? [];
+  const expSel = el('select', { class: 'input', ...(expList.length ? {} : { disabled: 'disabled' }) });
+  expSel.append(el('option', { value: '' }, expList.length ? '— 本次不使用经历 —' : '（角色卡里还没有经历，可先去角色卡添加）'));
+  expList.forEach((x, i) => expSel.append(el('option', { value: String(i) }, `${x}　+2`)));
+  const expNote = el('div', { class: 'link-note exp-note' }, '');
+
+  const modSummary = el('div', { class: 'mod-summary' }, '');
+  const sign = (n: number) => `${n >= 0 ? '+' : ''}${n}`;
+
+  const baseMod = () => parseInt(modInput.value || '0', 10) || 0;
+  const expIndex = () => (expSel.value === '' ? -1 : parseInt(expSel.value, 10));
+  const expBonus = () => (expIndex() >= 0 ? 2 : 0);
+  const expName = () => (expIndex() >= 0 ? expList[expIndex()] : '');
+
+  function refreshSummary() {
+    const base = baseMod();
+    const bonus = expBonus();
+    if (!bonus) {
+      modSummary.textContent = `本次调整值 ${sign(base)}`;
+      modSummary.className = 'mod-summary';
+      return;
+    }
+    modSummary.textContent = `本次调整值 ${sign(base)}（属性）＋ 2（经历）＝ ${sign(base + bonus)}`;
+    modSummary.className = 'mod-summary has-exp';
+  }
+  refreshSummary();
+
+  traitSel.addEventListener('change', () => {
+    const zh = traitSel.value;
+    if (!zh) {
+      linkNote.textContent = '';
+      refreshSummary();
+      return;
+    }
+    const v = sheet.traits[zh] ?? 0;
+    modInput.value = String(v);
+    linkNote.textContent = `已联动角色卡 · ${zh} ${sign(v)}`;
+    refreshSummary();
+  });
+  modInput.addEventListener('input', refreshSummary);
+  expSel.addEventListener('change', () => {
+    const name = expName();
+    expNote.textContent = name ? `经历加值 +2 · ${name}` : '';
+    refreshSummary();
+  });
+
+  const rollWith = el('select', { class: 'input' });
   rollWith.append(
     el('option', { value: 'none' }, '无'),
     el('option', { value: 'advantage' }, '优势 (+d6)'),
     el('option', { value: 'disadvantage' }, '劣势 (-d6)'),
   );
 
-  const ampHope = el('input', { type: 'checkbox' }) as HTMLInputElement;
-  const ampFear = el('input', { type: 'checkbox' }) as HTMLInputElement;
+  // Difficulty: the GM owns it, every player rolls against the shared value.
+  const diffInput = el('input', { class: 'input', type: 'number', placeholder: '如 10、15（留空则只判希望/恐惧）' });
+  const diffRead = el('div', { class: 'diff-read' });
+  const diffState = el('div', { class: 'link-note diff-note' }, '');
+  const blindChk = el('input', { type: 'checkbox' });
 
-  const diffInput = el('input', { class: 'input', type: 'number', placeholder: '可选，如 10 或 15' }) as HTMLInputElement;
+  const initialDiff = getDifficulty();
+  if (isGM && initialDiff != null) diffInput.value = String(initialDiff);
 
-  const resultBox = el('div', { class: 'result-box' });
+  function paintDiff(v: number | null) {
+    if (v == null) {
+      diffRead.textContent = 'GM 尚未设定难度 · 本次只判希望 / 恐惧走向';
+      diffRead.className = 'diff-read off';
+      diffState.textContent = '未设难度 · 玩家端只判希望 / 恐惧走向';
+      diffState.className = 'link-note diff-note';
+    } else {
+      diffRead.textContent = `难度 ${v} · 实时同步自 GM`;
+      diffRead.className = 'diff-read on';
+      diffState.textContent = `✔ 已同步给玩家 · 难度 ${v}`;
+      diffState.className = 'link-note diff-note on';
+    }
+  }
+  paintDiff(initialDiff);
 
-  function doRoll() {
-    const modifier = parseInt(modInput.value || '0', 10) || 0;
-    const difficultyRaw = diffInput.value.trim();
-    const difficulty = difficultyRaw === '' ? undefined : parseInt(difficultyRaw, 10);
+  // GM edits publish instantly; players only ever mirror the published value.
+  diffInput.addEventListener('input', () => {
+    const raw = diffInput.value.trim();
+    const n = raw === '' ? null : parseInt(raw, 10);
+    setDifficulty(Number.isFinite(n as number) ? (n as number) : null);
+  });
+
+  offDiff?.();
+  offDiff = onDifficulty((v) => {
+    if (isGM && v != null && diffInput.value.trim() === '') diffInput.value = String(v);
+    paintDiff(v);
+  });
+
+  // ---- round-table options ----
+  const autoChk = el('input', { type: 'checkbox' }) as HTMLInputElement;
+  autoChk.checked = autoSettleOn();
+  autoChk.addEventListener('change', () => setAutoSettle(autoChk.checked));
+
+  const tableChk = el('input', { type: 'checkbox' }) as HTMLInputElement;
+  tableChk.checked = tableDiceOn();
+  tableChk.disabled = !appState.embedded;
+  tableChk.addEventListener('change', () => setTableDice(tableChk.checked));
+
+  const resultBox = el('div', { class: 'result-box is-hidden' });
+
+  // GM-only rigged roll. Players never get this node at all.
+  const force = isGM ? forcePanel() : null;
+
+  let rollToken = 0;
+
+  async function doRoll() {
+    const token = ++rollToken;
+    const base = baseMod();
+    const bonus = expBonus();
+    const modifier = base + bonus;
+    const blind = isGM && blindChk.checked;
+    // Everyone rolls against the difficulty the GM published.
+    const difficulty = getDifficulty() ?? undefined;
+
+    // 指定点数：二元骰都是 d12，够用才消耗
+    const maxSides = 12;
+    const pendingRig = isGM ? getForced() : null;
+    const rig = isGM ? takeForced(maxSides) : null;
+    if (rig != null) force?.refresh(true);
+    else if (pendingRig != null) force?.notifySkipped(maxSides);
+
     const res = rollDuality({
       modifier,
-      rollingWith: rollWith.value as any,
-      amplifyHope: ampHope.checked,
-      amplifyFear: ampFear.checked,
+      rollingWith: rollWith.value as 'none' | 'advantage' | 'disadvantage',
       difficulty,
+      force: rig,
     });
-    showResult(resultBox, res);
+
+    // ---- tumble first, then reveal ----
+    clear(resultBox);
+    resultBox.classList.remove('is-hidden');
+    const stage = diceStage();
+    resultBox.append(stage.wrap);
+    playSfx('tumble');
+
+    await animateDice(
+      stage.canvas,
+      [
+        { value: res.hope, sides: res.hopeSides, color: '#8b7cff' },
+        { value: res.fear, sides: res.fearSides, color: '#ff5c8a' },
+      ],
+      { onBounce: () => playSfx('bounce') },
+    );
+    if (token !== rollToken) {
+      stage.wrap.remove();
+      return;
+    }
+
+    // 结果音效：双数（大成功）> 希望 / 恐惧
+    if (res.outcome === 'critical') playSfx('doubles');
+    else playSfx(res.outcome === 'hope' ? 'hope' : 'fear');
+
+    // ---- automatic Hope / Fear settlement ----
+    let settleNote = '';
+    let settleTone: 'hope' | 'fear' | null = null;
+    if (!blind) {
+      if (res.outcome === 'fear') {
+        // 恐惧 > 希望：这一分永远归 GM 的恐惧池。
+        //   · GM 本机：直接加进自己的池子
+        //   · 玩家本机：广播出去，由 GM 的客户端 +1（这里只做提示）
+        if (isGM) {
+          if (autoChk.checked) {
+            const before = getFear();
+            const r = gainFear(1);
+            settleTone = 'fear';
+            settleNote = r.gained === 0
+              ? `恐惧池已满 ${FEAR_MAX}，本次未增加`
+              : `GM 恐惧 +1（恐惧池 ${r.after}/${FEAR_MAX}）`;
+            if (r.gained > 0) refreshFearBoards({ amount: r.gained, from: '你', before });
+          }
+        } else {
+          // 无论本地是否勾选「自动结算」，这条都会进 GM 的恐惧池，
+          // 所以提示也照常显示，免得玩家以为漏算了。
+          settleTone = 'fear';
+          settleNote = `恐惧 ${res.fear} > 希望 ${res.hope} · 恐惧池 +1`;
+        }
+      } else if (autoChk.checked && !isGM) {
+        const r = gainHope(1);
+        settleTone = 'hope';
+        settleNote = r.capped && r.gained === 0
+          ? `希望已达上限 ${HOPE_MAX}，本次未增加`
+          : `希望 +${r.gained}（当前 ${r.after}/${HOPE_MAX}）`;
+      }
+    }
+
+    const card = dualityResultCard(resultBox, res, blind, bonus ? expName() : '', settleNote, settleTone);
+    // 骰子留在桌面上再停 2.6 秒，让人看清点数，然后才收起
+    holdStage(stage.wrap, 2600);
+
+    // ---- dice on the table (never for blind rolls) ----
+    if (tableChk.checked && appState.embedded && !blind) {
+      void castDiceToTable({
+        dice: [
+          { text: String(res.hope), color: '#b3a7ff' },
+          { text: String(res.fear), color: '#ff8fb0' },
+        ],
+        note: `${appState.playerName || (isGM ? 'GM' : '玩家')} · ${outcomeTitle(res)} · 总计 ${res.total}`,
+      });
+    }
+
+    pushRoll({
+      id: newId(),
+      ts: Date.now(),
+      author: appState.playerName || (isGM ? 'GM' : '玩家'),
+      color: appState.playerColor || '#8b7cff',
+      gmOnly: blind,
+      kind: 'duality',
+      tone: res.outcome,
+      settleNote,
+      summary: `${outcomeTitle(res)} · 总计 ${res.total}`,
+      detail:
+        `希望 ${res.hope} + 恐惧 ${res.fear}` +
+        (base ? ` + 属性 ${sign(base)}` : '') +
+        (bonus ? ` + 经历「${expName()}」+2` : '') +
+        (difficulty != null ? ` → 对抗难度 ${difficulty}（${res.success ? '成功' : '失败'}）` : '') +
+        (settleNote ? ` ｜ ${settleNote}` : ''),
+    });
   }
 
-  const rollBtn = el('button', { class: 'btn primary', onclick: doRoll }, '🎲 投掷二元骰');
-  const rerollBtn = el('button', { class: 'btn', onclick: doRoll }, '↻ 再掷');
-
-  wrap.append(
-    el('p', { class: 'hint' }, '投掷希望 d12 与恐惧 d12，加上属性调整值。较高的那颗决定叙事走向；双骰相同即为大成功。'),
-    field('属性 (Trait)', traitSel),
+  appendAll(wrap,
+    el('p', { class: 'hint' },
+      isGM
+        ? '投掷希望 d12 与恐惧 d12，加上属性调整值与相关经历。较高的那颗决定叙事走向；双骰相同即为大成功。'
+        : '选择属性会自动带入你角色卡上的加值；若某段经历适用于这次判定，选中它可再 +2。难度由 GM 裁定。'),
+    field('属性 (Trait) · 联动角色卡', traitSel),
+    linkNote,
     field('调整值 (Modifier)', modInput),
+    field('经历 (Experience) · 适用则 +2', expSel),
+    expNote,
     field('优势 / 劣势', rollWith),
-    el('div', { class: 'row' },
-      el('label', { class: 'check' }, ampHope, el('span', {}, '放大希望骰 (d12→d20)')),
-      el('label', { class: 'check' }, ampFear, el('span', {}, '放大恐惧骰 (d12→d20)')),
+    isGM ? field('难度 (Difficulty)', diffInput) : field('对抗难度 (Difficulty) · 由 GM 制定', diffRead),
+    isGM ? diffState : null,
+    isGM
+      ? el('label', { class: 'check blind-check' }, blindChk, el('span', {}, '🔒 暗骰 · 仅 GM 可见(玩家端不显示)'))
+      : el('div', { class: 'hint lock-hint' }, '🔒 难度由 GM 设定，会实时同步到你这边；暗骰仅 GM 可见。'),
+    el('div', { class: 'opt-row' },
+      el('label', { class: 'check' }, autoChk, el('span', {}, '自动结算希望 / 恐惧')),
+      el('label', { class: 'check' + (appState.embedded ? '' : ' disabled') }, tableChk,
+        el('span', {}, appState.embedded ? '投到桌面' : '投到桌面（需在枭雄内）')),
     ),
-    field('难度 (Difficulty，可选)', diffInput),
-    el('div', { class: 'btn-row' }, rollBtn, rerollBtn),
+    modSummary,
+    force ? force.node : null,
+    el('div', { class: 'btn-row' },
+      el('button', { class: 'btn primary', onclick: doRoll }, '🎲 投掷二元骰'),
+      el('button', { class: 'btn', onclick: doRoll }, '↻ 再掷'),
+    ),
     resultBox,
   );
   return wrap;
 }
 
-function showResult(box: HTMLElement, res: DualityResult) {
-  clear(box);
-  const outcomeClass = res.outcome === 'hope' ? 'hope' : res.outcome === 'fear' ? 'fear' : 'critical';
+function outcomeTitle(res: DualityResult): string {
+  if (res.outcome === 'critical') return CRITICAL_INFO.title;
+  const side = res.outcome === 'hope' ? '希望' : '恐惧';
+  const q = quadrantFor(res);
+  if (q) return quadrantInfo(q)?.title ?? side;
+  return `${side}（未设难度）`;
+}
 
-  box.append(
-    el('div', { class: `outcome outcome-${outcomeClass}` },
-      el('div', { class: 'outcome-title' }, OUTCOME_LABEL[res.outcome]),
-      el('div', { class: 'outcome-desc' }, OUTCOME_DESC[res.outcome]),
-    ),
-  );
+function dualityResultCard(
+  box: HTMLElement,
+  res: DualityResult,
+  isBlind = false,
+  expName = '',
+  settleNote = '',
+  settleTone: 'hope' | 'fear' | null = null,
+): HTMLElement {
+  const card = el('div', { class: 'result-card' });
 
+  const blindBadge = isBlind ? el('div', { class: 'outcome-kicker blind-kicker' }, '🔒 暗骰 · 玩家端不会收到这条结果') : null;
+
+  // ---- only the outcome that actually happened is revealed; the rest stay hidden ----
+  if (res.outcome === 'critical') {
+    card.append(el('div', { class: 'outcome outcome-critical reveal' },
+      el('div', { class: 'outcome-kicker' }, '掷骰结果'),
+      blindBadge,
+      el('div', { class: 'outcome-title' }, CRITICAL_INFO.title),
+      el('div', { class: 'outcome-desc' }, pickSub(CRITICAL_INFO.subs)),
+    ));
+  } else {
+    const active = quadrantFor(res);
+    // Without a difficulty we only know the Hope/Fear side, so show that row's title.
+    const info = (active && quadrantInfo(active)) || quadrantInfo(
+      (res.outcome === 'hope' ? 'hope-success' : 'fear-success') as Quadrant,
+    )!;
+    card.append(el('div', { class: `outcome outcome-${info.tone} reveal` },
+      el('div', { class: 'outcome-kicker' }, active ? '掷骰结果' : '走向判定'),
+      blindBadge,
+      el('div', { class: 'outcome-title' }, active ? info.title : (info.tone === 'hope' ? '希望 · 主导' : '恐惧 · 主导')),
+      el('div', { class: 'outcome-desc' }, pickSub(info.subs)),
+    ));
+    if (active === null) {
+      card.append(el('div', { class: 'no-diff' }, '未设置难度：本次只判希望 / 恐惧走向，具体成败由 GM 裁定。'));
+    }
+  }
+
+  // ---- dice ----
   const diceRow = el('div', { class: 'dice-row' });
   diceRow.append(dieBox(`希望 d${res.hopeSides}`, res.hope, 'hope'));
   diceRow.append(dieBox(`恐惧 d${res.fearSides}`, res.fear, 'fear'));
@@ -111,14 +555,18 @@ function showResult(box: HTMLElement, res: DualityResult) {
   if (res.rollingWith === 'disadvantage' && res.disadvantageDie != null) {
     diceRow.append(dieBox('劣势 d6', `-${res.disadvantageDie}`, 'adv'));
   }
-  box.append(diceRow);
+  card.append(diceRow);
 
+  // ---- math ----
   const calc = el('div', { class: 'calc' });
   let calcText = `希望 ${res.hope} + 恐惧 ${res.fear}`;
   if (res.modifier) calcText += ` + 调整 ${res.modifier}`;
   if (res.rollingWith === 'advantage' && res.advantageDie != null) calcText += ` + 优势 ${res.advantageDie}`;
   if (res.rollingWith === 'disadvantage' && res.disadvantageDie != null) calcText += ` − 劣势 ${res.disadvantageDie}`;
   calc.append(el('div', { class: 'calc-line' }, calcText));
+  if (expName) {
+    calc.append(el('div', { class: 'calc-line exp-line' }, `其中经历「${expName}」已 +2`));
+  }
   calc.append(el('div', { class: 'calc-total' }, `总计 = ${res.total}`));
   if (res.difficulty != null) {
     calc.append(el('div', { class: 'calc-line' },
@@ -126,40 +574,149 @@ function showResult(box: HTMLElement, res: DualityResult) {
       el('b', { class: res.success ? 'ok' : 'bad' }, res.success ? '成功' : '失败'),
     ));
   }
-  box.append(calc);
+  card.append(calc);
+
+  if (settleNote) {
+    card.append(el('div', { class: `settle-note settle-${settleTone ?? 'hope'}` },
+      settleTone === 'fear' ? '💀 ' : '✨ ',
+      settleNote,
+    ));
+  }
+
+  // ---- collapsed reference so nobody sees the flavour text before rolling ----
+  card.append(quadrantReference(quadrantFor(res)));
+
+  box.append(card);
+  return card;
 }
 
-function polyView() {
+/** A closed <details> listing all four outcomes; the one that happened is marked. */
+function quadrantReference(active: Quadrant | null) {
+  const rows = el('div', { class: 'quad-grid' });
+  for (const q of QUADRANTS) {
+    rows.append(el('div', { class: `quad quad-${q.tone}` + (active === q.id ? ' active' : '') },
+      el('div', { class: 'quad-title' }, q.title),
+      el('div', { class: 'quad-sub' }, q.subs[0]),
+    ));
+  }
+  rows.append(el('div', { class: 'quad quad-critical' },
+    el('div', { class: 'quad-title' }, CRITICAL_INFO.title),
+    el('div', { class: 'quad-sub' }, CRITICAL_INFO.subs[0]),
+  ));
+  return el('details', { class: 'quad-ref' },
+    el('summary', {}, '结果对照表 · 点击展开'),
+    rows,
+  );
+}
+
+// ---------------------------------------------------------------- polyhedral
+
+function polyView(role: Role) {
+  const isGM = role === 'GM';
   const wrap = el('div');
 
-  const sidesSel = el('select', { class: 'input' }) as HTMLSelectElement;
+  const sidesSel = el('select', { class: 'input' });
   for (const s of [4, 6, 8, 10, 12, 20, 100]) sidesSel.append(el('option', { value: String(s) }, `d${s}`));
 
-  const countInput = el('input', { class: 'input', type: 'number', value: '1', min: '1', max: '50' }) as HTMLInputElement;
-  const modInput = el('input', { class: 'input', type: 'number', value: '0' }) as HTMLInputElement;
+  const countInput = el('input', { class: 'input', type: 'number', value: '1', min: '1', max: '50' });
+  const modInput = el('input', { class: 'input', type: 'number', value: '0' });
+  const blindChk = el('input', { type: 'checkbox' });
+
+  const tableChk = el('input', { type: 'checkbox' }) as HTMLInputElement;
+  tableChk.checked = tableDiceOn();
+  tableChk.disabled = !appState.embedded;
+  tableChk.addEventListener('change', () => setTableDice(tableChk.checked));
 
   const resultBox = el('div', { class: 'result-box' });
 
-  function doRoll() {
+  // GM-only rigged roll. Players never get this node at all.
+  const force = isGM ? forcePanel() : null;
+
+  let rollToken = 0;
+
+  async function doRoll() {
+    const token = ++rollToken;
     const sides = parseInt(sidesSel.value, 10);
     const count = Math.max(1, parseInt(countInput.value || '1', 10));
     const mod = parseInt(modInput.value || '0', 10);
-    const r = rollPolyhedral(sides, count, mod);
+    // 指定点数：骰面够大时取用，本次投掷的第一颗符合条件的骰子必出该点数
+    const pendingRig = isGM ? getForced() : null;
+    const rig = isGM ? takeForced(sides) : null;
+    if (rig != null) force?.refresh(true);
+    else if (pendingRig != null) force?.notifySkipped(sides);
+    const r = rollPolyhedral(sides, count, mod, rig);
+    const blind = isGM && blindChk.checked;
+
     clear(resultBox);
+    const stage = diceStage();
+    resultBox.append(stage.wrap);
+    playSfx('tumble');
+
+    const shown = r.rolls.slice(0, 6);
+    await animateDice(
+      stage.canvas,
+      shown.map((v) => ({ value: v, sides, color: '#8b7cff' })),
+      { onBounce: () => playSfx('bounce') },
+    );
+    if (token !== rollToken) {
+      stage.wrap.remove();
+      return;
+    }
+    // 天然 20 / 天然 1 有自己的音效，其余落定只留一声轻响
+    const nat = polyNat(sides, r.rolls);
+    playSfx(nat ?? 'bounce');
+
+    const card = el('div', { class: 'result-card' });
     const diceRow = el('div', { class: 'dice-row wrap' });
     for (const v of r.rolls) diceRow.append(dieBox(`d${sides}`, v, 'plain'));
-    resultBox.append(diceRow);
+    card.append(diceRow);
+
+    if (nat) {
+      card.append(el('div', { class: `nat-badge ${nat === 'nat20' ? 'nat-20' : 'nat-1'}` },
+        nat === 'nat20' ? '✦ 天然 20 · 大成功' : '✧ 天然 1 · 大失败',
+      ));
+    }
+
     const calc = el('div', { class: 'calc' });
     calc.append(el('div', { class: 'calc-line' }, `${count}d${sides}` + (mod ? (mod > 0 ? ` + ${mod}` : ` − ${Math.abs(mod)}`) : '') + ' = ' + r.rolls.join(' + ')));
     calc.append(el('div', { class: 'calc-total' }, `总计 = ${r.total}`));
-    resultBox.append(calc);
+    card.append(calc);
+    resultBox.append(card);
+    // 骰子停在桌面上 2.6 秒，让人看清点数，然后才收起
+    holdStage(stage.wrap, 2600);
+
+    if (tableChk.checked && appState.embedded && !blind) {
+      void castDiceToTable({
+        dice: shown.slice(0, 3).map((v) => ({ text: String(v), color: '#b3a7ff' })),
+        note: `${appState.playerName || (isGM ? 'GM' : '玩家')} · ${count}d${sides} · 总计 ${r.total}`,
+      });
+    }
+
+    pushRoll({
+      id: newId(),
+      ts: Date.now(),
+      author: appState.playerName || (isGM ? 'GM' : '玩家'),
+      color: appState.playerColor || '#8b7cff',
+      gmOnly: blind,
+      kind: 'poly',
+      summary:
+        `${count}d${sides}${mod ? (mod > 0 ? `+${mod}` : `${mod}`) : ''} = ${r.total}` +
+        (nat === 'nat20' ? ' · 天然 20' : nat === 'nat1' ? ' · 天然 1' : ''),
+      detail: r.rolls.join(' + '),
+    });
   }
 
-  wrap.append(
-    el('p', { class: 'hint' }, '标准多面骰投掷（d4–d100，可设数量与调整值）。'),
+  appendAll(wrap,
+    el('p', { class: 'hint' }, isGM ? '标准多面骰投掷（d4–d100，可设数量与调整值）。' : '标准多面骰投掷（d4–d100）。'),
     field('骰面', sidesSel),
     field('数量', countInput),
     field('调整值', modInput),
+    isGM ? el('label', { class: 'check blind-check' }, blindChk, el('span', {}, '🔒 暗骰 · 仅 GM 可见(玩家端不显示)')) : null,
+    el('div', { class: 'opt-row' },
+      el('label', { class: 'check' + (appState.embedded ? '' : ' disabled') }, tableChk,
+        el('span', {}, appState.embedded ? '投到桌面' : '投到桌面（需在枭雄内）')),
+    ),
+    force ? force.node : null,
     el('div', { class: 'btn-row' },
       el('button', { class: 'btn primary', onclick: doRoll }, '🎲 投掷'),
       el('button', { class: 'btn', onclick: doRoll }, '↻ 再掷'),
@@ -167,6 +724,53 @@ function polyView() {
     resultBox,
   );
   return wrap;
+}
+
+// ---------------------------------------------------------------- shared log
+
+function rollLogView(role: Role) {
+  const isGM = role === 'GM';
+  const wrap = el('div', { class: 'roll-log' });
+  const list = el('div', { class: 'log-list' });
+  wrap.append(el('div', { class: 'log-title' }, '🎲 全场投掷记录'), list);
+
+  function render() {
+    clear(list);
+    // Blind rolls only ever reach a GM's own client, but filter anyway so the
+    // rule holds even if one arrives from a stale broadcast.
+    const visible = rollLog.filter((e) => !e.gmOnly || isGM);
+    if (!visible.length) {
+      list.append(el('div', { class: 'log-empty' }, '还没有人投掷。'));
+      return;
+    }
+    for (const e of visible) {
+      list.append(
+        el('div', { class: 'log-item' + (e.gmOnly ? ' blind' : '') },
+          el('div', { class: 'log-top' },
+            el('span', { class: 'log-author', style: `color:${e.color}` }, e.author),
+            e.gmOnly ? el('span', { class: 'lock', title: '暗骰 · 仅你可见' }, '🔒 暗骰') : null,
+            el('span', { class: 'log-time' }, timeStr(e.ts)),
+          ),
+          el('div', { class: 'log-sum' }, e.summary),
+          el('div', { class: 'log-detail' }, e.detail),
+          // GM-only line: this player roll pushed a point into the Fear pool.
+          isGM && e.gmSettle ? el('div', { class: 'log-settle' }, '💀 ', e.gmSettle) : null,
+        ),
+      );
+    }
+  }
+
+  render();
+  onRollLogChange(render);
+  return wrap;
+}
+
+function timeStr(ts: number) {
+  try {
+    return new Date(ts).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+  } catch {
+    return '';
+  }
 }
 
 function field(label: string, control: HTMLElement) {

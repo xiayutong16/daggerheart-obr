@@ -34,6 +34,18 @@ export function clear(node: HTMLElement) {
   while (node.firstChild) node.removeChild(node.firstChild);
 }
 
+/**
+ * Like `parent.append(...)` but skips null / undefined / false, so a ternary that
+ * yields "no element" never ends up rendered as the literal text "null".
+ */
+export function appendAll(parent: HTMLElement, ...children: Child[]) {
+  for (const c of children) {
+    if (c == null || c === false) continue;
+    parent.append(c as Node | string);
+  }
+  return parent;
+}
+
 export function qs<T extends HTMLElement = HTMLElement>(sel: string, root: ParentNode = document): T {
   return root.querySelector(sel) as T;
 }

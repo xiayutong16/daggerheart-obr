@@ -2,10 +2,16 @@
 
 export type Outcome = 'hope' | 'fear' | 'critical';
 
+/** Which side of the table is looking at the panel. */
+export type Role = 'GM' | 'PLAYER';
+
+/** The four resolution quadrants of a duality roll. */
+export type Quadrant = 'hope-success' | 'hope-fail' | 'fear-success' | 'fear-fail';
+
 export interface DualityResult {
   hope: number;
   fear: number;
-  hopeSides: number; // 12 or 20 (amplified)
+  hopeSides: number; // always 12 (duality dice are never amplified)
   fearSides: number;
   modifier: number;
   rollingWith: 'none' | 'advantage' | 'disadvantage';
@@ -16,6 +22,8 @@ export interface DualityResult {
   higherDie: 'hope' | 'fear';
   difficulty?: number;
   success?: boolean;
+  /** Set when a GM-supplied 指定点数 was used for one of the dice. */
+  forced?: 'hope' | 'fear';
 }
 
 export interface PolyResult {
@@ -23,32 +31,26 @@ export interface PolyResult {
   rolls: number[];
   modifier: number;
   total: number;
+  /** Set when a GM-supplied 指定点数 was used. */
+  forced?: boolean;
 }
 
-export interface Monster {
-  nameZh: string;
-  nameEn: string;
-  tier: number;
-  typeZh: string; // 标准 / 斗士 / 潜伏 ...
-  difficulty: number; // 闪避/难度
-  hp: number;
-  stress: number;
-  thresholds?: string; // e.g. "8 / 15"
-  experiences?: string[];
-  attacks?: { name: string; atk: string; range: string; damage: string }[];
-  features?: { name: string; kind: string; text: string }[];
-  source?: string;
-}
-
-export interface Environment {
-  nameZh: string;
-  nameEn: string;
-  tier: number;
-  typeZh: string; // 探索 / 险境 / 社交 / 事件
-  impulses?: string;
-  potentialAdversaries?: string[];
-  features?: { name: string; kind: string; text: string }[];
-  gmPrompts?: string[];
+/** One line in the shared (broadcast) roll log. */
+export interface RollLogEntry {
+  id: string;
+  ts: number;
+  author: string;
+  color: string;
+  gmOnly: boolean;
+  kind: 'duality' | 'poly';
+  summary: string;
+  detail: string;
+  /** Duality rolls carry their tone so the table can settle Hope / Fear automatically. */
+  tone?: Outcome;
+  /** Human-readable note about an automatic settlement, shown in the log. */
+  settleNote?: string;
+  /** GM-only note: the Fear this roll pushed into the GM's pool. */
+  gmSettle?: string;
 }
 
 export interface CharData {
@@ -63,7 +65,8 @@ export interface CharData {
   stress: number;
   stressMax: number;
   evasion: number;
-  armor: number;
+  armor: number; // remaining armor slots
+  armorMax: number; // armor score = total slots
   proficiency: number;
   hope: number;
   fear: number;

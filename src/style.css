@@ -99,7 +99,15 @@ select.input { cursor: pointer; }
 .die-adv .die-value { color: var(--gold); }
 
 .result-box { margin-top: 8px; }
+.result-box.is-hidden { display: none; }
 .outcome { padding: 12px; border-radius: 10px; margin-bottom: 6px; }
+.outcome.reveal { animation: outcomeReveal 0.28s ease both; }
+@keyframes outcomeReveal {
+  from { opacity: 0; transform: translateY(-4px) scale(0.985); }
+  to { opacity: 1; transform: none; }
+}
+.outcome-kicker { font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin-bottom: 3px; }
+.outcome-kicker.blind-kicker { color: var(--gold); letter-spacing: 0; text-transform: none; margin-top: 2px; }
 .outcome-hope { background: rgba(139,124,255,0.15); border: 1px solid var(--hope); }
 .outcome-fear { background: rgba(255,92,138,0.15); border: 1px solid var(--fear); }
 .outcome-critical { background: rgba(255,206,92,0.15); border: 1px solid var(--gold); }
@@ -107,7 +115,10 @@ select.input { cursor: pointer; }
 .outcome-hope .outcome-title { color: var(--hope); }
 .outcome-fear .outcome-title { color: var(--fear); }
 .outcome-critical .outcome-title { color: var(--gold); }
-.outcome-desc { font-size: 12px; color: var(--muted); margin-top: 4px; }
+.outcome-desc { font-size: 12.5px; color: var(--muted); margin-top: 4px; }
+.outcome-hope .outcome-desc,
+.outcome-fear .outcome-desc,
+.outcome-critical .outcome-desc { color: #fff; opacity: 0.95; }
 
 .calc { background: var(--bg-2); border: 1px solid var(--line); border-radius: 8px; padding: 10px; margin-top: 8px; }
 .calc-line { font-size: 13px; color: var(--muted); }
@@ -180,3 +191,280 @@ select.input { cursor: pointer; }
 .prompt-list li { font-size: 12px; color: var(--muted); margin: 3px 0; }
 
 .btn.small.ghost { background: transparent; margin-top: 6px; }
+
+/* ---- role badge / dev toggle ---- */
+.title-row { display: flex; align-items: center; gap: 8px; }
+.role-badge {
+  font-size: 10px; font-weight: 800; padding: 2px 8px; border-radius: 999px;
+  letter-spacing: 0.5px; line-height: 1.5;
+}
+.role-badge.gm { background: rgba(255,206,92,0.18); color: var(--gold); border: 1px solid var(--gold); }
+.role-badge.pl { background: rgba(139,124,255,0.18); color: var(--hope); border: 1px solid var(--hope); }
+.dev-toggle {
+  font-size: 10.5px; padding: 3px 8px; border-radius: 6px;
+  border: 1px solid var(--line); background: transparent; color: var(--muted);
+  cursor: pointer; font-family: var(--font);
+}
+.dev-toggle:hover { color: var(--text); border-color: var(--accent); }
+
+/* ---- four quadrants ---- */
+.quad-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin: 4px 0 10px; }
+.quad {
+  padding: 9px 10px; border-radius: 10px; border: 1px solid var(--line);
+  background: var(--bg-2); opacity: 0.42; transition: opacity 0.15s ease, border-color 0.15s ease;
+}
+.quad-title { font-size: 12.5px; font-weight: 800; }
+.quad-sub { font-size: 11px; color: var(--muted); margin-top: 3px; line-height: 1.45; }
+.quad-hope .quad-title { color: var(--hope); }
+.quad-fear .quad-title { color: var(--fear); }
+.quad.active { opacity: 1; }
+.quad-hope.active {
+  border-color: var(--hope); background: rgba(139,124,255,0.16);
+  box-shadow: 0 0 0 1px var(--hope) inset, 0 0 14px rgba(139,124,255,0.22);
+}
+.quad-fear.active {
+  border-color: var(--fear); background: rgba(255,92,138,0.16);
+  box-shadow: 0 0 0 1px var(--fear) inset, 0 0 14px rgba(255,92,138,0.22);
+}
+.quad.active .quad-sub { color: var(--text); }
+.quad.rowhint { opacity: 0.85; border-style: dashed; }
+.quad-critical { grid-column: 1 / -1; }
+.quad-critical .quad-title { color: var(--gold); }
+
+.quad-ref {
+  margin-top: 10px; border-top: 1px dashed var(--line); padding-top: 8px;
+}
+.quad-ref > summary {
+  cursor: pointer; font-size: 11.5px; color: var(--muted); list-style: none;
+  padding: 4px 2px; user-select: none;
+}
+.quad-ref > summary::-webkit-details-marker { display: none; }
+.quad-ref > summary::before { content: '▸ '; }
+.quad-ref[open] > summary::before { content: '▾ '; }
+.quad-ref > summary:hover { color: var(--text); }
+.quad-ref .quad-grid { margin: 8px 0 2px; }
+.quad-ref .quad { opacity: 0.75; }
+
+.no-diff {
+  font-size: 11.5px; color: var(--muted); background: var(--bg-2);
+  border: 1px dashed var(--line); border-radius: 8px; padding: 7px 10px; margin-bottom: 10px;
+}
+
+/* ---- linkage / blind ---- */
+.link-note { font-size: 11.5px; color: var(--ok); margin: -4px 0 8px; min-height: 15px; }
+.link-note.exp-note { color: var(--gold); }
+.mod-summary { font-size: 11.5px; color: var(--muted); margin: 0 0 6px; }
+.mod-summary.has-exp { color: var(--gold); }
+.calc-line.exp-line { color: var(--gold); }
+.blind-check {
+  border: 1px dashed var(--gold); border-radius: 8px; padding: 6px 10px;
+  color: var(--gold); margin: 4px 0 10px; width: 100%;
+}
+.lock-hint { margin: 2px 0 8px; }
+
+/* ---- shared difficulty (GM sets it, players mirror it) ---- */
+.diff-read {
+  border: 1px dashed var(--line); border-radius: 8px; padding: 7px 10px;
+  font-size: 12px; color: var(--muted);
+}
+.diff-read.on {
+  border-color: var(--fear); color: #ffd9e4; font-weight: 700;
+  background: rgba(255, 92, 138, 0.10);
+}
+.diff-read.off { border-style: dotted; }
+.diff-note { margin: 5px 0 8px; color: var(--muted); }
+.diff-note.on { color: var(--gold); }
+
+/* ---- shared roll log ---- */
+.roll-log { margin-top: 16px; border-top: 1px solid var(--line); padding-top: 10px; }
+.log-title { font-size: 12px; font-weight: 700; color: var(--accent); margin-bottom: 8px; }
+.log-list { display: flex; flex-direction: column; gap: 6px; max-height: 230px; overflow-y: auto; }
+.log-list::-webkit-scrollbar { width: 6px; }
+.log-list::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
+.log-empty { color: var(--muted); font-size: 12px; text-align: center; padding: 12px; }
+.log-item { background: var(--bg-2); border: 1px solid var(--line); border-radius: 8px; padding: 7px 9px; }
+.log-item.blind { border-color: var(--gold); background: rgba(255,206,92,0.07); }
+.log-top { display: flex; align-items: center; gap: 6px; margin-bottom: 2px; }
+.log-author { font-size: 11.5px; font-weight: 700; }
+.lock { font-size: 10px; color: var(--gold); border: 1px solid var(--gold); border-radius: 999px; padding: 0 6px; line-height: 1.6; }
+.log-time { margin-left: auto; font-size: 10px; color: var(--muted); }
+.log-sum { font-size: 12.5px; font-weight: 600; }
+.log-detail { font-size: 11px; color: var(--muted); margin-top: 1px; }
+.log-settle { font-size: 11px; font-weight: 700; color: var(--fear); margin-top: 3px; }
+
+/* ---- GM 恐惧池 fear board ---- */
+.fear-board {
+  margin: 0 0 10px; padding: 10px 12px 11px; border-radius: 12px;
+  border: 1px solid var(--fear);
+  background: linear-gradient(180deg, rgba(255, 92, 138, 0.14), rgba(255, 92, 138, 0.04));
+}
+.fear-board.is-collapsed { padding-bottom: 8px; }
+.fb-head { display: flex; align-items: center; gap: 8px; }
+.fb-title { font-size: 12.5px; font-weight: 800; color: var(--fear); letter-spacing: 0.02em; }
+.fb-count { font-size: 12px; color: var(--muted); }
+.fb-count b { font-size: 19px; color: #fff; font-weight: 800; display: inline-block; }
+.fb-count.bump b { color: var(--fear); animation: fbBump 0.55s ease-out; }
+.fb-flash {
+  margin-top: 7px; font-size: 11px; font-weight: 700; color: #ffd9e4;
+  background: rgba(255, 92, 138, 0.18); border: 1px solid rgba(255, 92, 138, 0.55);
+  border-radius: 999px; padding: 2px 9px; display: inline-block;
+  animation: fbFlash 0.4s ease-out;
+}
+@keyframes fbBump {
+  0% { transform: scale(1); }
+  35% { transform: scale(1.32); }
+  100% { transform: scale(1); }
+}
+@keyframes fbFlash {
+  from { opacity: 0; transform: translateY(-3px); }
+  to { opacity: 1; transform: none; }
+}
+.fb-max { font-size: 11px; }
+.fb-ctrl { display: flex; gap: 4px; margin-left: auto; }
+.fb-step {
+  width: 24px; height: 24px; border-radius: 6px; cursor: pointer; font-size: 15px; font-weight: 800;
+  border: 1px solid var(--fear); background: rgba(255, 92, 138, 0.12); color: var(--fear); line-height: 1;
+}
+.fb-step:hover:not(:disabled) { background: var(--fear); color: #1a1220; }
+.fb-step:disabled { opacity: 0.35; cursor: not-allowed; }
+.fb-toggle {
+  border: 1px solid var(--line); background: transparent; color: var(--muted);
+  font-size: 10.5px; padding: 3px 7px; border-radius: 6px; cursor: pointer;
+}
+.fb-toggle:hover { color: var(--text); border-color: var(--fear); }
+
+.fb-pips { display: flex; flex-wrap: wrap; gap: 4px; margin: 9px 0 8px; }
+.fb-pip {
+  width: 17px; height: 17px; border-radius: 5px; cursor: pointer; padding: 0;
+  border: 1px solid rgba(255, 92, 138, 0.45); background: transparent;
+  transition: background 0.12s ease, transform 0.12s ease;
+}
+.fb-pip.gap { margin-left: 6px; }
+.fb-pip.on { background: var(--fear); border-color: var(--fear); box-shadow: 0 0 7px rgba(255, 92, 138, 0.5); }
+.fb-pip:hover { transform: scale(1.12); }
+
+.fb-quick { display: flex; gap: 5px; margin-bottom: 10px; }
+.fb-q {
+  flex: 1; border: 1px solid var(--line); background: var(--bg-3); color: var(--text);
+  border-radius: 7px; padding: 4px 0; font-size: 11.5px; font-weight: 600; cursor: pointer;
+}
+.fb-q:hover { border-color: var(--fear); color: var(--fear); }
+.fb-q.wide { flex: 0 0 auto; padding: 4px 9px; color: var(--muted); }
+
+.fb-scene-label { font-size: 10.5px; color: var(--muted); letter-spacing: 0.06em; margin-bottom: 5px; }
+.fb-scenes { display: flex; flex-wrap: wrap; gap: 5px; }
+.fb-chip {
+  border: 1px solid var(--line); background: transparent; color: var(--muted);
+  border-radius: 999px; padding: 3px 9px; font-size: 11px; cursor: pointer;
+}
+.fb-chip:hover { border-color: var(--fear); color: var(--text); }
+.fb-chip.on { border-color: var(--fear); color: #fff; background: rgba(255, 92, 138, 0.28); font-weight: 700; }
+.fb-guide { font-size: 11.5px; margin-top: 7px; color: var(--muted); }
+.fb-guide.ok { color: var(--ok); }
+.fb-guide.low { color: var(--gold); }
+.fb-guide.high { color: var(--fear); }
+.fb-eg { font-size: 10.5px; color: var(--muted); opacity: 0.75; margin-top: 3px; line-height: 1.5; }
+
+.fb-ref { margin-top: 9px; }
+.fb-ref > summary { font-size: 11px; color: var(--muted); cursor: pointer; }
+.fb-ref > summary:hover { color: var(--fear); }
+.fb-ref-body { font-size: 11.5px; color: var(--muted); line-height: 1.6; padding: 6px 0 0; }
+.fb-ref-body p { margin: 4px 0; }
+.fb-ref-sub { color: var(--text); }
+.fb-ref-body ul { margin: 2px 0 4px; padding-left: 16px; }
+.fb-ref-body li { margin: 1px 0; }
+.fb-note { color: var(--gold); opacity: 0.85; font-size: 10.5px; }
+
+/* ---- GM 指定点数 (rigged roll) ---- */
+.force-box {
+  margin: 6px 0 10px; padding: 9px 10px; border-radius: 10px;
+  border: 1px dashed var(--gold); background: rgba(255, 206, 92, 0.06);
+}
+.force-head { font-size: 11.5px; font-weight: 700; color: var(--gold); margin-bottom: 6px; letter-spacing: 0.02em; }
+.force-row { display: flex; gap: 6px; align-items: center; }
+.force-input { flex: 1; min-width: 0; }
+.btn-mini {
+  border: 1px solid var(--line); background: var(--bg-3); color: var(--text);
+  border-radius: 7px; padding: 5px 10px; font-size: 12px; cursor: pointer; white-space: nowrap;
+}
+.btn-mini:hover { border-color: var(--gold); color: var(--gold); }
+.btn-mini.ghost { background: transparent; }
+.btn-mini:disabled { opacity: 0.42; cursor: not-allowed; }
+.force-note { font-size: 11px; color: var(--muted); margin-top: 6px; line-height: 1.5; }
+.force-note.on { color: var(--gold); }
+.force-note.ok { color: var(--ok); }
+.force-note.warn { color: var(--gold); }
+.force-note.err { color: var(--bad); }
+.force-box.flash { animation: forceFlash 0.7s ease; }
+@keyframes forceFlash {
+  0% { box-shadow: 0 0 0 0 rgba(255, 206, 92, 0.55); border-color: var(--gold); }
+  60% { box-shadow: 0 0 0 6px rgba(255, 206, 92, 0); }
+  100% { box-shadow: none; }
+}
+.btn-mini.ready { border-color: var(--gold); color: var(--gold); }
+.force-hint { font-size: 10.5px; color: var(--muted); opacity: 0.8; margin-top: 4px; line-height: 1.5; }
+
+/* ---- header actions / sound toggle ---- */
+.head-actions { margin-left: auto; display: flex; align-items: center; gap: 6px; }
+.icon-btn {
+  width: 26px; height: 24px; display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid var(--line); background: transparent; border-radius: 6px; cursor: pointer;
+  font-size: 12px; line-height: 1; padding: 0; color: var(--text);
+}
+.icon-btn:hover { border-color: var(--accent); }
+.icon-btn.off { opacity: 0.55; filter: grayscale(1); }
+
+/* ---- dice animation stage ---- */
+.dice-stage-wrap {
+  background: radial-gradient(120% 100% at 50% 0%, rgba(139,124,255,0.10), rgba(21,19,31,0) 70%);
+  border: 1px solid var(--line); border-radius: 12px; padding: 4px 6px; margin-bottom: 8px;
+  overflow: hidden; max-height: 200px;
+  transition: opacity 0.45s ease, max-height 0.48s ease, padding 0.48s ease, margin 0.48s ease, border-color 0.45s ease;
+}
+.dice-stage { display: block; width: 100%; height: 132px; }
+.dice-stage-wrap.stage-out {
+  opacity: 0; max-height: 0; padding-top: 0; padding-bottom: 0; margin-bottom: 0; border-color: transparent;
+}
+
+/* result card — sits under the settled dice */
+.result-card { animation: cardIn 0.3s ease both; }
+@keyframes cardIn {
+  from { opacity: 0; transform: translateY(3px); }
+  to { opacity: 1; transform: none; }
+}
+
+/* ---- natural 1 / 20 badges ---- */
+.nat-badge {
+  display: inline-block; margin-top: 8px; font-size: 11.5px; font-weight: 700;
+  padding: 2px 9px; border-radius: 999px; letter-spacing: 0.02em;
+}
+.nat-badge.nat-20 {
+  color: #ffe9a8; border: 1px solid var(--gold);
+  background: rgba(255, 206, 92, 0.16);
+  box-shadow: 0 0 12px rgba(255, 206, 92, 0.35);
+}
+.nat-badge.nat-1 { color: #ffb3c4; border: 1px solid var(--fear); background: rgba(255, 92, 138, 0.14); }
+.result-card > .nat-badge { margin: 8px 0 2px; }
+
+/* ---- options row ---- */
+.opt-row { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 14px; margin: 2px 0 8px; }
+.check.disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* ---- automatic settlement badge ---- */
+.settle-note {
+  margin-top: 8px; font-size: 12px; border-radius: 8px; padding: 7px 10px;
+  border: 1px dashed var(--line); background: var(--bg-2);
+}
+.settle-hope { color: var(--hope); border-color: var(--hope); background: rgba(139,124,255,0.10); }
+.settle-fear { color: var(--fear); border-color: var(--fear); background: rgba(255,92,138,0.10); }
+
+/* ---- damage resolution ---- */
+.dmg-row { display: flex; gap: 8px; margin-bottom: 6px; }
+.dmg-row .input { flex: 1; }
+.dmg-preview { font-size: 11.5px; color: var(--muted); margin: 2px 0 0; min-height: 16px; }
+.dmg-preview.active { color: var(--gold); }
+.dmg-result { font-size: 12px; margin-top: 8px; padding: 8px 10px; border-radius: 8px; display: none; }
+.dmg-result.ok, .dmg-result.warn, .dmg-result.bad { display: block; }
+.dmg-result.ok { color: var(--ok); background: rgba(76,208,125,0.10); border: 1px solid rgba(76,208,125,0.5); }
+.dmg-result.warn { color: var(--gold); background: rgba(255,206,92,0.10); border: 1px solid rgba(255,206,92,0.5); }
+.dmg-result.bad { color: var(--bad); background: rgba(255,107,107,0.10); border: 1px solid rgba(255,107,107,0.5); }
