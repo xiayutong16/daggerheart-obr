@@ -3,8 +3,6 @@ import OBR from '@owlbear-rodeo/sdk';
 import { el, clear } from './dom';
 import { renderDicePanel } from './dicePanel';
 import { renderCharacterPanel } from './characterPanel';
-import { renderBestiaryPanel } from './bestiaryPanel';
-import { renderEnvironmentPanel } from './environmentPanel';
 import { appState } from './state';
 
 function buildShell() {
@@ -22,8 +20,6 @@ function buildShell() {
   const tabDefs = [
     { id: 'dice', label: '🎲 骰子', render: renderDicePanel },
     { id: 'char', label: '📋 角色卡', render: renderCharacterPanel },
-    { id: 'best', label: '👹 敌人图鉴', render: renderBestiaryPanel },
-    { id: 'env', label: '🗺️ 领土图鉴', render: renderEnvironmentPanel },
   ];
 
   const btns: HTMLButtonElement[] = [];
