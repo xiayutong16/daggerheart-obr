@@ -1,0 +1,13 @@
+{
+  "name": "匕首之心 Daggerheart",
+  "version": "1.0.0",
+  "manifest_version": 1,
+  "description": "匕首之心（Daggerheart）跑团辅助：二元骰（希望/恐惧）、多面骰、角色卡、怪物图鉴、领土图鉴。",
+  "action": {
+    "title": "匕首之心",
+    "icon": "./icon.svg",
+    "popover": "./index.html",
+    "height": 700,
+    "width": 460
+  }
+}
