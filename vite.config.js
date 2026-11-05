@@ -8,6 +8,8 @@ export default defineConfig({
   plugins: [viteSingleFile()],
   build: {
     outDir: 'docs',
+    // The GM bestiary lives in docs/bestiary/; never wipe it on a main build.
+    emptyOutDir: false,
     assetsInlineLimit: 100000000,
     chunkSizeWarningLimit: 100000000,
     cssCodeSplit: false,

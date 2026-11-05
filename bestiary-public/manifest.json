@@ -1,0 +1,15 @@
+{
+  "name": "匕首之心 · 怪物图鉴 (GM)",
+  "version": "1.0.0",
+  "manifest_version": 1,
+  "description": "匕首之心 GM 专用怪物图鉴：139 条核心规则书敌人、特性检索、遭遇追踪与对抗难度联动。",
+  "icon": "https://xiayutong16.github.io/daggerheart-obr/bestiary/icon.svg",
+  "author": "xiayutong16",
+  "action": {
+    "title": "怪物图鉴",
+    "icon": "https://xiayutong16.github.io/daggerheart-obr/bestiary/icon.svg",
+    "popover": "https://xiayutong16.github.io/daggerheart-obr/bestiary/index.html",
+    "height": 780,
+    "width": 620
+  }
+}

@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="怪物图鉴">
+  <rect width="64" height="64" rx="14" fill="#1d1a2b"/>
+  <path d="M32 8 C24 11 14 12 7 11 V48 C14 49 24 48 32 45 C40 48 50 49 57 48 V11 C50 12 40 11 32 8 Z"
+        fill="#2b2542" stroke="#8b7cff" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M32 8 V45" stroke="#8b7cff" stroke-width="2"/>
+  <path d="M11 27 C16 19 25 19 29 27 C25 35 16 35 11 27 Z" fill="#ffce5c" opacity=".18" stroke="#ffce5c" stroke-width="1.8"/>
+  <circle cx="20" cy="27" r="5.6" fill="#ff5c8a"/>
+  <ellipse cx="20" cy="27" rx="1.9" ry="5" fill="#15131f"/>
+  <circle cx="17.6" cy="24.4" r="1.4" fill="#fff" opacity=".85"/>
+  <path d="M37 22 H53 M37 28 H51 M37 34 H53 M37 40 H48" stroke="#a39fc0" stroke-width="1.8" stroke-linecap="round" opacity=".75"/>
+</svg>
