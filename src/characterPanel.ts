@@ -2,8 +2,20 @@ import { el, clear } from './dom';
 import type { CharData, Role } from './types';
 import { TRAITS, CLASSES, ANCESTRIES, COMMUNITIES, DOMAINS } from './data/classes';
 import { appState } from './state';
+import { normalizeChar, decodeCharCode } from './charSync';
 
 const KEY = 'dh_char_v1';
+const CARD_URL = 'https://xiayutong16.github.io/daggerheart-obr/card/index.html';
+
+/**
+ * A sheet arrived from the character-card workshop. Set the session copy as
+ * well as storage, so this works even when the Owlbear iframe silently blocks
+ * localStorage (a known platform quirk).
+ */
+export function applySyncedChar(raw: CharData): void {
+  memChar = normalizeChar(raw) ?? defaultChar();
+  save(memChar);
+}
 
 /** Result of the last damage resolution — kept module-level so a re-render still shows it. */
 let lastDamage: { text: string; tone: 'ok' | 'warn' | 'bad' } | null = null;
@@ -98,6 +110,33 @@ export function renderCharacterPanel(root: HTMLElement, role: Role = 'GM') {
   );
   const saved = el('span', { class: 'saved-flash' }, '');
 
+  // ---- link to the standalone character-card workshop ----
+  const codeInput = el('input', {
+    class: 'input', type: 'text', placeholder: '粘贴 DH1: 开头的车卡导入码…',
+  }) as HTMLInputElement;
+  const syncCard = el('div', { class: 'card char-sync' },
+    el('div', { class: 'card-title' }, '🔗 车卡工坊 · 关联枭雄'),
+    el('div', { class: 'hint' },
+      '在车卡工坊做好角色卡后点「同步到枭雄」，这里会自动更新；若浏览器拦截本地存储，就复制导入码粘贴到下面。'),
+    el('div', { class: 'char-sync-row' }, codeInput,
+      el('button', {
+        class: 'btn small',
+        onclick: () => {
+          const d = decodeCharCode(codeInput.value);
+          if (!d) { flash(saved, '导入码无效，需以 DH1: 开头'); return; }
+          applySyncedChar(d);
+          flash(saved, '已从车卡工坊导入');
+          codeInput.value = '';
+          renderAll();
+        },
+      }, '📥 导入'),
+    ),
+    el('div', { class: 'char-sync-links' },
+      el('a', { href: CARD_URL, target: '_blank', rel: 'noopener' }, '↗ 打开车卡工坊（新标签）'),
+      el('span', {}, '也可把车卡工坊的 manifest 加进枭雄工具栏，直接在房间内车卡'),
+    ),
+  );
+
   // ---- identity ----
   const nameInput = textInput(data.name, (v) => { data.name = v; save(data); });
   const ancestrySel = selectInput(ANCESTRIES, data.ancestry, (v) => { data.ancestry = v; save(data); });
@@ -166,7 +205,7 @@ export function renderCharacterPanel(root: HTMLElement, role: Role = 'GM') {
     renderCharacterPanel(root, role);
   }
 
-  root.append(header, saved, identity, traitsCard, resources, damageCard(data, renderAll), listCard);
+  root.append(header, saved, syncCard, identity, traitsCard, resources, damageCard(data, renderAll), listCard);
 }
 
 /** Automatic damage resolution against the character's damage thresholds. */

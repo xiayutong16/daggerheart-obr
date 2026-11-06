@@ -2,13 +2,14 @@ import './style.css';
 import OBR from '@owlbear-rodeo/sdk';
 import { el, clear } from './dom';
 import { renderDicePanel } from './dicePanel';
-import { renderCharacterPanel } from './characterPanel';
+import { renderCharacterPanel, applySyncedChar } from './characterPanel';
 import { appState } from './state';
 import { startRollLog, setLocalRole, resetRollLogListeners, onRemoteRoll, annotateRoll } from './rollLog';
 import { isSoundOn, toggleSound } from './sound';
 import { FEAR_MAX, gainFear, getFear } from './settle';
 import { refreshFearBoards } from './fearBoard';
 import { startQuickRolls } from './quickRolls';
+import { startCharSync } from './charSync';
 
 let currentTab = 'dice';
 let refreshChar: (() => void) | null = null;
@@ -142,6 +143,12 @@ async function init() {
   setLocalRole(appState.role);
   startRollLog();
   startQuickRolls();
+  // The character-card workshop pushes sheets here over LOCAL broadcast /
+  // BroadcastChannel. Re-render the sheet tab if it is currently visible.
+  startCharSync((d) => {
+    applySyncedChar(d);
+    if (currentTab === 'char') refreshChar?.();
+  });
   wireRemoteSettle();
   buildShell();
 }

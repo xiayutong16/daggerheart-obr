@@ -1,8 +1,8 @@
 {
   "name": "匕首之心 Daggerheart",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "manifest_version": 1,
-  "description": "匕首之心（Daggerheart）跑团辅助：二元骰（希望/恐惧）、格子选骰 + 表达式投掷、角色卡、本地难度与怪物卡快捷投掷（命中优势/劣势、匕首之心重击）。",
+  "description": "匕首之心（Daggerheart）跑团辅助：二元骰（希望/恐惧）、格子选骰 + 表达式投掷、角色卡（可从车卡工坊同步/导入）、本地难度与怪物卡快捷投掷。",
   "action": {
     "title": "匕首之心",
     "icon": "https://xiayutong16.github.io/daggerheart-obr/icon.svg",

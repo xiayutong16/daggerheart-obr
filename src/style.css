@@ -567,3 +567,11 @@ select.input { cursor: pointer; }
   .dp-die { height: 62px; }
   .dp-actions { grid-template-columns: repeat(2, 1fr); }
 }
+
+/* ---- link to the standalone character-card workshop ---- */
+.char-sync { border-color: rgba(139,124,255,.4); background: linear-gradient(135deg, rgba(139,124,255,.09), var(--bg-2)); }
+.char-sync .hint { font-size: 10.5px; line-height: 1.6; margin-bottom: 6px; }
+.char-sync-row { display: flex; gap: 6px; align-items: center; }
+.char-sync-row .input { flex: 1; min-width: 0; font-size: 11px; }
+.char-sync-links { display: flex; gap: 8px; flex-wrap: wrap; font-size: 10px; color: var(--muted); margin-top: 7px; line-height: 1.5; }
+.char-sync-links a { color: var(--accent); text-decoration: underline; }
