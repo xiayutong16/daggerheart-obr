@@ -10,6 +10,9 @@ import { FEAR_MAX, gainFear, getFear } from './settle';
 import { refreshFearBoards } from './fearBoard';
 import { startQuickRolls } from './quickRolls';
 import { startCharSync } from './charSync';
+import { setupSidebarTools } from './sidebarTools';
+import { setupCharToken } from './charToken';
+import { startCharCardPage } from './charCard';
 
 let currentTab = 'dice';
 let refreshChar: (() => void) | null = null;
@@ -120,6 +123,11 @@ function devToggle() {
 }
 
 async function init() {
+  const query = new URLSearchParams(location.search);
+  // Floating standalone character card — a completely different page shape.
+  if (query.get('mode') === 'charcard') { void startCharCardPage(); return; }
+  const isPanel = query.get('panel') === '1';
+
   try {
     if (OBR && OBR.isAvailable) {
       appState.embedded = true;
@@ -149,6 +157,12 @@ async function init() {
     applySyncedChar(d);
     if (currentTab === 'char') refreshChar?.();
   });
+  // Only the primary extension iframe owns the right-side tools and the
+  // token listeners. A panel opened from those tools must not register again.
+  if (!isPanel && OBR.isAvailable) {
+    try { await setupSidebarTools(appState.role); } catch (err) { console.warn('sidebar tools unavailable', err); }
+    try { setupCharToken(appState.role); } catch (err) { console.warn('char token unavailable', err); }
+  }
   wireRemoteSettle();
   buildShell();
 }

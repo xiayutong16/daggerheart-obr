@@ -1,6 +1,6 @@
 {
   "name": "匕首之心 · 车卡工坊",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "manifest_version": 1,
   "description": "匕首之心角色卡制作站：填表即时生成角色卡，可导出 JSON / 打印 PDF / 一键同步到枭雄里的主插件角色卡。GM 与玩家都能用。",
   "icon": "https://xiayutong16.github.io/daggerheart-obr/card/icon.svg",
