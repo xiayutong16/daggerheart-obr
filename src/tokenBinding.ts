@@ -29,9 +29,20 @@ export interface BoundToken {
 }
 
 // ---------- URLs ----------
+// Owlbear can proxy extension iframes, so `location.origin` inside the iframe is
+// not a trustworthy base. Everything handed back to Owlbear (popover/modal urls,
+// context-menu icons) must be the published absolute URL — same lesson as the
+// manifest's icon/popover fields.
+export const PUBLISHED_BASE = 'https://xiayutong16.github.io/daggerheart-obr/bestiary/';
+function pageUrl(): string {
+  return OBR.isAvailable
+    ? `${PUBLISHED_BASE}index.html`
+    : new URL(location.pathname, location.origin).toString();
+}
 /** Absolute url of this very page with a fresh query string. */
 export function viewUrl(params: Record<string, string | undefined> = {}): string {
-  const u = new URL(location.pathname, location.origin);
+  const u = new URL(pageUrl());
+  u.search = '';
   for (const [k, v] of Object.entries(params)) {
     if (v != null && v !== '') u.searchParams.set(k, v);
   }
@@ -39,7 +50,7 @@ export function viewUrl(params: Record<string, string | undefined> = {}): string
 }
 /** Absolute url for a context-menu icon served next to the extension html. */
 export function iconUrl(file: string): string {
-  return new URL(file, new URL(location.pathname, location.origin)).toString();
+  return new URL(file, PUBLISHED_BASE).toString();
 }
 
 // ---------- local fallback (browser preview outside Owlbear) ----------
