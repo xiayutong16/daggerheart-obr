@@ -70,7 +70,7 @@ function buildShell() {
       el('div', { class: 'head-actions' }, soundButton(), appState.embedded ? null : devToggle()),
     ),
     el('div', { class: 'app-sub' },
-      isGM ? 'Daggerheart · GM 视角（含恐惧池与全局暗骰）' : 'Daggerheart · 玩家视角'),
+      isGM ? 'Daggerheart · GM 视角（含恐惧池与暗骰）' : 'Daggerheart · 玩家视角'),
   );
 
   const tabs = el('div', { class: 'tabs' });

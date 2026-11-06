@@ -34,6 +34,10 @@ import {
   newId,
 } from './rollLog';
 import { getForced, setForced, takeForced, isPersisted, FORCE_MIN, FORCE_MAX } from './force';
+import {
+  DIE_TYPES, parseExpression, bumpGroup, bumpModifier, cycleAdv,
+  maxSides, rollExpression, diceDetail,
+} from './expression';
 import { fearBoard, refreshFearBoards } from './fearBoard';
 import { getLocalDifficulty, setLocalDifficulty, onLocalDifficulty } from './localDifficulty';
 import {
@@ -115,14 +119,6 @@ function holdStage(wrap: HTMLElement, ms: number) {
     wrap.classList.add('stage-out');
     window.setTimeout(() => wrap.remove(), 480);
   }, ms);
-}
-
-/** A d20 that came up 20 (or 1) — gets its own sound and badge. */
-function polyNat(sides: number, rolls: number[]): 'nat20' | 'nat1' | null {
-  if (sides !== 20) return null;
-  if (rolls.includes(20)) return 'nat20';
-  if (rolls.length && rolls.every((v) => v === 1)) return 'nat1';
-  return null;
 }
 
 interface ForcePanel {
@@ -620,120 +616,319 @@ function quadrantReference(active: Quadrant | null) {
   );
 }
 
-// ---------------------------------------------------------------- polyhedral
+// ---------------------------------------------------------------- polyhedral picker
+
+const POLY_LAST_KEY = 'dh_poly_last_v1';
+const POLY_SAVED_KEY = 'dh_poly_saved_v1';
+const POLY_BLIND_KEY = 'dh_poly_global_blind_v1';
+const POLY_TARGET_KEY = 'dh_poly_target_v1';
+
+interface PolyLast { expr: string; note: string }
+function loadPolyLast(): PolyLast {
+  try {
+    const p = JSON.parse(localStorage.getItem(POLY_LAST_KEY) || '{}');
+    if (p && typeof p.expr === 'string') return { expr: p.expr, note: typeof p.note === 'string' ? p.note : '' };
+  } catch { /* ignore */ }
+  return { expr: '1d20', note: '' };
+}
+function savePolyLast(expr: string, note: string) {
+  try { localStorage.setItem(POLY_LAST_KEY, JSON.stringify({ expr, note })); } catch { /* ignore */ }
+}
+function loadPolySaved(): string[] {
+  try {
+    const a = JSON.parse(localStorage.getItem(POLY_SAVED_KEY) || '[]');
+    if (Array.isArray(a)) return a.filter(x => typeof x === 'string').slice(0, 8);
+  } catch { /* ignore */ }
+  return [];
+}
+function savePolySaved(list: string[]) {
+  try { localStorage.setItem(POLY_SAVED_KEY, JSON.stringify(list)); } catch { /* ignore */ }
+}
+function globalBlindOn(): boolean {
+  try { return localStorage.getItem(POLY_BLIND_KEY) === '1'; } catch { return false; }
+}
+function setGlobalBlind(on: boolean) {
+  try { localStorage.setItem(POLY_BLIND_KEY, on ? '1' : '0'); } catch { /* ignore */ }
+}
+function loadTarget(): string {
+  try { return localStorage.getItem(POLY_TARGET_KEY) || ''; } catch { return ''; }
+}
+
+/** Wire-frame polyhedron glyphs for the seven die types. */
+function dieIcon(sides: number): string {
+  const open = '<svg viewBox="0 0 24 24" width="34" height="34" fill="rgba(139,124,255,.09)" stroke="#e8e4ff" stroke-width="1.2" stroke-linejoin="round">';
+  const close = '</svg>';
+  const shapes: Record<number, string> = {
+    4: '<path d="M12 3 L21 19 L3 19 Z"/><path d="M12 3 L12 19 M3 19 L12 15 L21 19"/>',
+    6: '<rect x="4" y="4" width="16" height="16" rx="1.5"/><path d="M4 9 L9 4 M20 9 L15 4 M9 4 L20 15"/>',
+    8: '<path d="M12 2 L21 12 L12 22 L3 12 Z"/><path d="M3 12 L21 12 M12 2 L12 22"/>',
+    10: '<path d="M12 2 L20 8 L12 22 L4 8 Z"/><path d="M4 8 L20 8 M12 2 L12 22"/>',
+    12: '<path d="M12 2 L21 8 L18 20 L6 20 L3 8 Z"/><path d="M12 2 L12 11 M3 8 L12 11 L21 8 M6 20 L12 11 L18 20"/>',
+    20: '<path d="M12 2 L21 7 L21 17 L12 22 L3 17 L3 7 Z"/><path d="M12 2 L18 12 L12 22 L6 12 Z M3 7 L12 12 L21 7 M3 17 L12 12 L21 17"/>',
+    100: '<path d="M12 1 L14.5 7.5 L21.5 6 L17 12 L21.5 18 L14.5 16.5 L12 23 L9.5 16.5 L2.5 18 L7 12 L2.5 6 L9.5 7.5 Z"/>',
+  };
+  return open + (shapes[sides] || shapes[20]) + close;
+}
 
 function polyView(role: Role) {
   const isGM = role === 'GM';
-  const wrap = el('div');
+  const wrap = el('div', { class: 'dp' });
+  const last = loadPolyLast();
+  let saved = loadPolySaved();
+  let blindOnce = false;
+  let forceVisible = false;
+  let rollToken = 0;
 
-  const sidesSel = el('select', { class: 'input' });
-  for (const s of [4, 6, 8, 10, 12, 20, 100]) sidesSel.append(el('option', { value: String(s) }, `d${s}`));
-
-  const countInput = el('input', { class: 'input', type: 'number', value: '1', min: '1', max: '50' });
-  const modInput = el('input', { class: 'input', type: 'number', value: '0' });
-  const blindChk = el('input', { type: 'checkbox' });
+  const exprInput = el('input', {
+    class: 'dp-input', type: 'text', spellcheck: 'false',
+    placeholder: '例如 2d6 + 1d20 + 5 或 adv(1d20)', value: last.expr,
+    oninput: () => paintCounts(),
+    onkeydown: (e: Event) => { if ((e as KeyboardEvent).key === 'Enter') void doRoll(); },
+  }) as HTMLInputElement;
+  const noteInput = el('input', {
+    class: 'dp-input', type: 'text', placeholder: '备注（可选，例如 偷袭）', value: last.note,
+    onkeydown: (e: Event) => { if ((e as KeyboardEvent).key === 'Enter') void doRoll(); },
+  }) as HTMLInputElement;
+  const targetInput = el('input', {
+    class: 'dp-target-input', type: 'number', min: '1', placeholder: '—', value: loadTarget(),
+    onchange: () => { try { localStorage.setItem(POLY_TARGET_KEY, targetInput.value); } catch { /* ignore */ } },
+  }) as HTMLInputElement;
+  const parseState = el('div', { class: 'dp-parse' });
+  const savedRow = el('div', { class: 'dp-saved' });
+  const resultBox = el('div', { class: 'result-box' });
 
   const tableChk = el('input', { type: 'checkbox' }) as HTMLInputElement;
   tableChk.checked = tableDiceOn();
   tableChk.disabled = !appState.embedded;
   tableChk.addEventListener('change', () => setTableDice(tableChk.checked));
 
-  const resultBox = el('div', { class: 'result-box' });
-
-  // GM-only rigged roll. Players never get this node at all.
+  // GM-only rigged roll — hidden behind the "固定下次" button by default.
   const force = isGM ? forcePanel() : null;
 
-  let rollToken = 0;
+  // ---- die grid ----
+  const grid = el('div', { class: 'dp-grid' });
+  const badges = new Map<number, HTMLElement>();
+  for (const s of DIE_TYPES) {
+    const badge = el('span', { class: 'dp-count' }, '');
+    badges.set(s, badge);
+    grid.append(el('button', {
+      class: 'dp-die', type: 'button', title: `左键 +1d${s} · 右键 −1d${s}`,
+      onclick: () => { setExpr(bumpGroup(exprInput.value, s, 1)); playSfx('click'); },
+      oncontextmenu: (e: Event) => {
+        e.preventDefault();
+        setExpr(bumpGroup(exprInput.value, s, -1));
+        playSfx('click');
+      },
+    },
+      el('span', { class: 'dp-icon', html: dieIcon(s) }),
+      el('span', { class: 'dp-label' }, `d${s}`),
+      badge,
+    ));
+  }
+
+  function setExpr(v: string) {
+    exprInput.value = v;
+    paintCounts();
+  }
+
+  function paintCounts() {
+    const p = parseExpression(exprInput.value);
+    for (const [s, badge] of badges) {
+      const g = p.valid ? p.groups.find(x => x.sides === s) : undefined;
+      badge.textContent = g ? `×${g.count}` : '';
+      badge.classList.toggle('on', !!g);
+      const cell = badge.parentElement;
+      if (cell) cell.classList.toggle('active', !!g);
+    }
+    exprInput.classList.toggle('invalid', !p.valid);
+    if (!p.valid) {
+      parseState.textContent = `⚠ ${p.error}`;
+      parseState.className = 'dp-parse bad';
+    } else {
+      const mode = p.adv === 'adv' ? ' · 优势取高' : p.adv === 'dis' ? ' · 劣势取低' : '';
+      parseState.textContent = `✓ ${p.groups.reduce((n, g) => n + g.count, 0)} 颗骰子${mode}`;
+      parseState.className = 'dp-parse ok';
+    }
+  }
+
+  function renderSaved() {
+    clear(savedRow);
+    if (!saved.length) return;
+    savedRow.append(el('span', { class: 'dp-saved-label' }, '已保存：'));
+    for (const s of saved) {
+      savedRow.append(el('span', { class: 'dp-chip' },
+        el('button', { class: 'dp-chip-main', title: '点击载入', onclick: () => { setExpr(s); playSfx('click'); } }, s),
+        el('button', { class: 'dp-chip-x', title: '删除', onclick: () => { saved = saved.filter(x => x !== s); savePolySaved(saved); renderSaved(); } }, '×'),
+      ));
+    }
+  }
+
+  // ---- buttons ----
+  const blindBtn = el('button', { class: 'dp-toggle' }, '🔒 暗骰');
+  blindBtn.addEventListener('click', () => {
+    blindOnce = !blindOnce;
+    blindBtn.classList.toggle('active', blindOnce);
+    playSfx('click');
+  });
+  const globalBtn = el('button', { class: 'dp-toggle' + (globalBlindOn() ? ' active' : '') },
+    `🌐 全局暗骰：${globalBlindOn() ? '开' : '关'}`);
+  globalBtn.addEventListener('click', () => {
+    const on = !globalBlindOn();
+    setGlobalBlind(on);
+    globalBtn.textContent = `🌐 全局暗骰：${on ? '开' : '关'}`;
+    globalBtn.classList.toggle('active', on);
+    playSfx('click');
+  });
+  const forceBtn = el('button', { class: 'dp-toggle wide' }, '');
+  function paintForceBtn() {
+    const v = isGM ? getForced() : null;
+    forceBtn.textContent = v != null ? `🎯 固定下次：${v}` : '🎯 固定下次：关';
+    forceBtn.classList.toggle('active', v != null || forceVisible);
+  }
+  forceBtn.addEventListener('click', () => {
+    forceVisible = !forceVisible;
+    if (force?.node) force.node.classList.toggle('is-hidden', !forceVisible);
+    paintForceBtn();
+    playSfx('click');
+  });
+
+  const forceBox = force ? force.node : null;
+  if (forceBox) {
+    forceBox.classList.add('is-hidden');
+    // Keep the button label in sync when the GM sets / clears a value.
+    const setBtn = forceBox.querySelector('.btn-mini');
+    setBtn?.addEventListener('click', () => setTimeout(paintForceBtn, 30));
+    forceBox.querySelectorAll('.btn-mini').forEach(b => b.addEventListener('click', () => setTimeout(paintForceBtn, 30)));
+  }
+
+  function saveCurrent() {
+    const p = parseExpression(exprInput.value);
+    if (!p.valid) { paintCounts(); return; }
+    saved = [p.text, ...saved.filter(x => x !== p.text)].slice(0, 8);
+    savePolySaved(saved);
+    renderSaved();
+    parseState.textContent = `✓ 已保存「${p.text}」`;
+  }
 
   async function doRoll() {
+    const p = parseExpression(exprInput.value);
+    if (!p.valid) { paintCounts(); return; }
     const token = ++rollToken;
-    const sides = parseInt(sidesSel.value, 10);
-    const count = Math.max(1, parseInt(countInput.value || '1', 10));
-    const mod = parseInt(modInput.value || '0', 10);
-    // 指定点数：骰面够大时取用，本次投掷的第一颗符合条件的骰子必出该点数
+    const noteText = noteInput.value.trim();
+    savePolyLast(p.text, noteText);
+
+    // 指定点数：表达式里最大的骰面够大才消耗设定
+    const biggest = maxSides(p);
     const pendingRig = isGM ? getForced() : null;
-    const rig = isGM ? takeForced(sides) : null;
+    const rig = isGM ? takeForced(biggest) : null;
     if (rig != null) force?.refresh(true);
-    else if (pendingRig != null) force?.notifySkipped(sides);
-    const r = rollPolyhedral(sides, count, mod, rig);
-    const blind = isGM && blindChk.checked;
+    else if (pendingRig != null) force?.notifySkipped(biggest);
+    paintForceBtn();
+
+    const r = rollExpression(p, rig);
+    const blind = isGM && (blindOnce || globalBlindOn());
 
     clear(resultBox);
     const stage = diceStage();
     resultBox.append(stage.wrap);
     playSfx('tumble');
-
-    const shown = r.rolls.slice(0, 6);
+    const shown = r.dice.slice(0, 6);
     await animateDice(
       stage.canvas,
-      shown.map((v) => ({ value: v, sides, color: '#8b7cff' })),
+      shown.map(d => ({ value: d.value, sides: d.sides, color: d.sides === 20 ? '#ffce5c' : '#8b7cff' })),
       { onBounce: () => playSfx('bounce') },
     );
-    if (token !== rollToken) {
-      stage.wrap.remove();
-      return;
-    }
-    // 天然 20 / 天然 1 有自己的音效，其余落定只留一声轻响
-    const nat = polyNat(sides, r.rolls);
+    if (token !== rollToken) { stage.wrap.remove(); return; }
+
+    const d20s = r.dice.filter(d => d.sides === 20).map(d => d.value);
+    const nat = d20s.includes(20) ? 'nat20' : (r.dice.length === 1 && r.dice[0].value === 1) ? 'nat1' : null;
     playSfx(nat ?? 'bounce');
 
     const card = el('div', { class: 'result-card' });
-    const diceRow = el('div', { class: 'dice-row wrap' });
-    for (const v of r.rolls) diceRow.append(dieBox(`d${sides}`, v, 'plain'));
-    card.append(diceRow);
-
+    const row = el('div', { class: 'dice-row wrap' });
+    for (const d of r.dice) row.append(dieBox(`d${d.sides}`, d.value, 'plain'));
+    card.append(row);
     if (nat) {
       card.append(el('div', { class: `nat-badge ${nat === 'nat20' ? 'nat-20' : 'nat-1'}` },
-        nat === 'nat20' ? '✦ 天然 20 · 大成功' : '✧ 天然 1 · 大失败',
-      ));
+        nat === 'nat20' ? '✦ 天然 20 · 大成功' : '✧ 天然 1 · 大失败'));
     }
-
     const calc = el('div', { class: 'calc' });
-    calc.append(el('div', { class: 'calc-line' }, `${count}d${sides}` + (mod ? (mod > 0 ? ` + ${mod}` : ` − ${Math.abs(mod)}`) : '') + ' = ' + r.rolls.join(' + ')));
+    calc.append(el('div', { class: 'calc-line' }, `${p.text} → ${diceDetail(p, r)}`));
     calc.append(el('div', { class: 'calc-total' }, `总计 = ${r.total}`));
+    if (rig != null) calc.append(el('div', { class: 'calc-line', }, `🎯 指定点数 ${rig} 已生效`));
+    const target = parseInt(targetInput.value, 10);
+    if (Number.isFinite(target) && target > 0) {
+      calc.append(el('div', { class: 'calc-line' }, `目标总数 ${target} → `,
+        el('b', { class: r.total >= target ? 'ok' : 'bad' }, r.total >= target ? '达成' : '未达成')));
+    }
+    if (noteText) calc.append(el('div', { class: 'calc-line' }, `备注：${noteText}`));
     card.append(calc);
     resultBox.append(card);
-    // 骰子停在桌面上 2.6 秒，让人看清点数，然后才收起
     holdStage(stage.wrap, 2600);
 
     if (tableChk.checked && appState.embedded && !blind) {
       void castDiceToTable({
-        dice: shown.slice(0, 3).map((v) => ({ text: String(v), color: '#b3a7ff' })),
-        note: `${appState.playerName || (isGM ? 'GM' : '玩家')} · ${count}d${sides} · 总计 ${r.total}`,
+        dice: shown.slice(0, 3).map(d => ({ text: String(d.value), color: '#b3a7ff' })),
+        note: `${appState.playerName || (isGM ? 'GM' : '玩家')} · ${p.text} · 总计 ${r.total}`,
       });
     }
 
     pushRoll({
-      id: newId(),
-      ts: Date.now(),
+      id: newId(), ts: Date.now(),
       author: appState.playerName || (isGM ? 'GM' : '玩家'),
       color: appState.playerColor || '#8b7cff',
-      gmOnly: blind,
-      kind: 'poly',
-      summary:
-        `${count}d${sides}${mod ? (mod > 0 ? `+${mod}` : `${mod}`) : ''} = ${r.total}` +
-        (nat === 'nat20' ? ' · 天然 20' : nat === 'nat1' ? ' · 天然 1' : ''),
-      detail: r.rolls.join(' + '),
+      gmOnly: blind, kind: 'poly',
+      summary: `${p.text} = ${r.total}${nat === 'nat20' ? ' · 天然 20' : nat === 'nat1' ? ' · 天然 1' : ''}`,
+      detail: `${diceDetail(p, r)}${noteText ? ` ｜ ${noteText}` : ''}`,
     });
   }
 
-  appendAll(wrap,
-    el('p', { class: 'hint' }, isGM ? '标准多面骰投掷（d4–d100，可设数量与调整值）。' : '标准多面骰投掷（d4–d100）。'),
-    field('骰面', sidesSel),
-    field('数量', countInput),
-    field('调整值', modInput),
-    isGM ? el('label', { class: 'check blind-check' }, blindChk, el('span', {}, '🔒 暗骰 · 仅 GM 可见(玩家端不显示)')) : null,
-    el('div', { class: 'opt-row' },
-      el('label', { class: 'check' + (appState.embedded ? '' : ' disabled') }, tableChk,
-        el('span', {}, appState.embedded ? '投到桌面' : '投到桌面（需在枭雄内）')),
+  wrap.append(
+    el('div', { class: 'dp-head' }, el('b', {}, '骰子'),
+      el('span', { class: 'dp-sub' }, '左键 +1 · 右键 −1 · 也可直接编辑表达式')),
+    grid,
+    el('div', { class: 'dp-section' }, '表达式'),
+    el('div', { class: 'dp-expr-row' }, exprInput,
+      el('button', { class: 'dp-step', title: '调整值 −1', onclick: () => { setExpr(bumpModifier(exprInput.value, -1)); playSfx('click'); } }, '−'),
+      el('button', { class: 'dp-step', title: '调整值 +1', onclick: () => { setExpr(bumpModifier(exprInput.value, 1)); playSfx('click'); } }, '+'),
+      el('button', { class: 'dp-step adv', title: '切换 普通 / 优势 / 劣势', onclick: () => { setExpr(cycleAdv(exprInput.value)); playSfx('click'); } }, '优势'),
     ),
-    force ? force.node : null,
-    el('div', { class: 'btn-row' },
-      el('button', { class: 'btn primary', onclick: doRoll }, '🎲 投掷'),
-      el('button', { class: 'btn', onclick: doRoll }, '↻ 再掷'),
+    parseState,
+    noteInput,
+    savedRow,
+    el('div', { class: 'dp-actions' },
+      el('button', { class: 'dp-btn primary', onclick: () => void doRoll() }, '投掷'),
+      el('button', {
+        class: 'dp-btn', title: '恢复上一次组合并直接重投',
+        onclick: () => {
+          const l = loadPolyLast();
+          setExpr(l.expr);
+          noteInput.value = l.note;
+          void doRoll();
+        },
+      }, '上一次'),
+      el('button', { class: 'dp-btn gold', title: '保存当前表达式', onclick: saveCurrent }, '保存组合'),
+      el('button', {
+        class: 'dp-btn danger',
+        onclick: () => { setExpr(''); noteInput.value = ''; resultBox.replaceChildren(); playSfx('click'); },
+      }, '清空'),
     ),
+    isGM
+      ? el('div', { class: 'dp-toggles' }, blindBtn, globalBtn)
+      : el('div', { class: 'dp-hint' }, '暗骰与指定点数仅 GM 可用。'),
+    el('div', { class: 'dp-toggles second' },
+      el('label', { class: 'dp-target' }, '目标总数', targetInput),
+      isGM ? forceBtn : null,
+    ),
+    forceBox,
+    el('label', { class: 'check dp-table' + (appState.embedded ? '' : ' disabled') }, tableChk,
+      el('span', {}, appState.embedded ? '投到桌面' : '投到桌面（需在枭雄内）')),
     resultBox,
   );
+
+  paintCounts();
+  renderSaved();
+  paintForceBtn();
   return wrap;
 }
 
