@@ -1,11 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="车卡工坊">
   <rect x="1" y="1" width="62" height="62" rx="14" fill="#1b1730" stroke="#ffce5c" stroke-width="2"/>
-  <g fill="none" stroke="#f2efff" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round">
-    <path d="M32 7 L55 20 L55 44 L32 57 L9 44 L9 20 Z"/>
-    <path d="M32 7 L45 30 L19 30 Z"/>
-    <path d="M9 20 L19 30 M55 20 L45 30 M9 44 L19 30 M55 44 L45 30"/>
-    <path d="M19 30 L32 57 L45 30"/>
-    <path d="M32 7 L32 57" opacity=".55"/>
-  </g>
-  <circle cx="32" cy="30" r="3.2" fill="#ffce5c"/>
+  <rect x="16" y="12" width="32" height="40" rx="5" fill="#2b2542" stroke="#f2efff" stroke-width="2.2"/>
+  <path d="M32 23 V41 M23 32 H41" stroke="#ffce5c" stroke-width="3.2" stroke-linecap="round"/>
 </svg>

@@ -6,7 +6,7 @@
   "description": "匕首之心 (Daggerheart) 扩展 for Owlbear Rodeo - 二元骰、角色卡、怪物图鉴、领土图鉴",
   "scripts": {
     "dev": "vite",
-    "build": "vite build && vite build -c vite.bestiary.config.js && node scripts/flatten-bestiary.mjs && vite build -c vite.card.config.js && node scripts/flatten-card.mjs",
+    "build": "vite build && vite build -c vite.bestiary.config.js && node scripts/flatten-bestiary.mjs && vite build -c vite.card.config.js && node scripts/flatten-card.mjs && vite build -c vite.char.config.js && node scripts/flatten-char.mjs",
     "preview": "vite preview"
   },
   "devDependencies": {

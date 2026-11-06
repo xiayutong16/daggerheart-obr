@@ -14,7 +14,7 @@ import {
   encodeCharCode, decodeCharCode,
 } from './charSync';
 
-const MAIN_URL = 'https://xiayutong16.github.io/daggerheart-obr/index.html';
+const CHAR_URL = 'https://xiayutong16.github.io/daggerheart-obr/char/index.html';
 const DL_DOMAINS = 'cm-domain-options';
 
 function defaultData(): CharData {
@@ -406,8 +406,8 @@ function buildShell() {
       ),
     ),
     el('div', { class: 'cm-code-hint' },
-      '在枭雄主插件打开「我的角色卡」，把这段码粘贴到「车卡工坊」输入框点导入即可；也可直接在本页点「同步到枭雄」。',
-      el('a', { href: MAIN_URL, target: '_blank', rel: 'noopener' }, '↗ 打开主插件页面'),
+      '在枭雄右侧工具栏打开「我的角色卡」页面，展开「从车卡工坊导入」粘贴这段码即可；也可直接点上面的「同步到枭雄」。',
+      el('a', { href: CHAR_URL, target: '_blank', rel: 'noopener' }, '↗ 打开角色卡页面'),
     ),
   );
 

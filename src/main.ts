@@ -2,9 +2,9 @@ import './style.css';
 import OBR from '@owlbear-rodeo/sdk';
 import { el, clear } from './dom';
 import { renderDicePanel } from './dicePanel';
-import { renderCharacterPanel, applySyncedChar } from './characterPanel';
+import { applySyncedChar } from './characterPanel';
 import { appState } from './state';
-import { startRollLog, setLocalRole, resetRollLogListeners, onRemoteRoll, annotateRoll } from './rollLog';
+import { startRollLog, setLocalRole, onRemoteRoll, annotateRoll } from './rollLog';
 import { isSoundOn, toggleSound } from './sound';
 import { FEAR_MAX, gainFear, getFear } from './settle';
 import { refreshFearBoards } from './fearBoard';
@@ -14,8 +14,6 @@ import { setupSidebarTools } from './sidebarTools';
 import { setupCharToken } from './charToken';
 import { startCharCardPage } from './charCard';
 
-let currentTab = 'dice';
-let refreshChar: (() => void) | null = null;
 let settleWired = false;
 
 /**
@@ -42,7 +40,6 @@ function wireRemoteSettle() {
       : `恐惧池已满 ${FEAR_MAX}，本次未增加`;
     annotateRoll(entry.id, { gmSettle: note });
     if (r.gained > 0) refreshFearBoards({ amount: r.gained, from: entry.author, before });
-    if (currentTab === 'char') refreshChar?.();
   });
 }
 
@@ -73,41 +70,14 @@ function buildShell() {
       el('span', { class: 'role-badge ' + (isGM ? 'gm' : 'pl') }, isGM ? 'GM' : '玩家'),
       el('div', { class: 'head-actions' }, soundButton(), appState.embedded ? null : devToggle()),
     ),
-    el('div', { class: 'app-sub' },
-      isGM ? 'Daggerheart · GM 视角（含恐惧池与暗骰）' : 'Daggerheart · 玩家视角'),
+    el('div', { class: 'app-sub' }, 'Daggerheart · 骰子面板（角色卡在右侧工具栏）'),
   );
 
-  const tabs = el('div', { class: 'tabs' });
+  // Dice only. The character sheet is a separate page (right-rail tool),
+  // so this popover never mixes the two anymore.
   const content = el('div', { class: 'content' });
-
-  const tabDefs = [
-    { id: 'dice', label: '🎲 骰子' },
-    { id: 'char', label: '📋 我的角色卡' },
-  ];
-
-  const btns: HTMLButtonElement[] = [];
-  function select(id: string) {
-    currentTab = id;
-    btns.forEach((b) => b.classList.toggle('active', b.dataset.id === id));
-    resetRollLogListeners();
-    if (id === 'char') {
-      refreshChar = () => renderCharacterPanel(content, appState.role);
-      refreshChar();
-    } else {
-      renderDicePanel(content, appState.role);
-    }
-  }
-
-  for (const t of tabDefs) {
-    const b = el('button', { class: 'tab', onclick: () => select(t.id) }, t.label);
-    b.dataset.id = t.id;
-    btns.push(b);
-    tabs.append(b);
-  }
-
-  app.append(header, tabs, content);
-  // `?tab=char` is only used by local previews; inside Owlbear it defaults to the dice tab.
-  select(new URLSearchParams(location.search).get('tab') === 'char' ? 'char' : 'dice');
+  app.append(header, content);
+  renderDicePanel(content, appState.role);
 }
 
 /** Only shown outside Owlbear (e.g. browser preview) so you can inspect both views. */
@@ -151,12 +121,9 @@ async function init() {
   setLocalRole(appState.role);
   startRollLog();
   startQuickRolls();
-  // The character-card workshop pushes sheets here over LOCAL broadcast /
-  // BroadcastChannel. Re-render the sheet tab if it is currently visible.
-  startCharSync((d) => {
-    applySyncedChar(d);
-    if (currentTab === 'char') refreshChar?.();
-  });
+  // Keep the local sheet copy fresh so right-click "绑定我的角色卡" always
+  // binds the latest data. The standalone character page re-renders itself.
+  startCharSync((d) => { applySyncedChar(d); });
   // Only the primary extension iframe owns the right-side tools and the
   // token listeners. A panel opened from those tools must not register again.
   if (!isPanel && OBR.isAvailable) {

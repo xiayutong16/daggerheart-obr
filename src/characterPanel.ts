@@ -5,7 +5,6 @@ import { appState } from './state';
 import { normalizeChar, decodeCharCode } from './charSync';
 
 const KEY = 'dh_char_v1';
-const CARD_URL = 'https://xiayutong16.github.io/daggerheart-obr/card/index.html';
 
 /**
  * A sheet arrived from the character-card workshop. Set the session copy as
@@ -110,14 +109,15 @@ export function renderCharacterPanel(root: HTMLElement, role: Role = 'GM') {
   );
   const saved = el('span', { class: 'saved-flash' }, '');
 
-  // ---- link to the standalone character-card workshop ----
+  // ---- optional import fallback (the only workshop entry is the "建立角色卡"
+  //      button in the standalone character page header) ----
   const codeInput = el('input', {
     class: 'input', type: 'text', placeholder: '粘贴 DH1: 开头的车卡导入码…',
   }) as HTMLInputElement;
-  const syncCard = el('div', { class: 'card char-sync' },
-    el('div', { class: 'card-title' }, '🔗 车卡工坊 · 关联枭雄'),
+  const syncCard = el('details', { class: 'card char-sync' },
+    el('summary', { class: 'card-title' }, '从车卡工坊导入（可选）'),
     el('div', { class: 'hint' },
-      '在车卡工坊做好角色卡后点「同步到枭雄」，这里会自动更新；若浏览器拦截本地存储，就复制导入码粘贴到下面。'),
+      '做好角色卡后点「同步到枭雄」会自动更新这里；若浏览器拦截本地存储，就复制导入码粘贴到下面。'),
     el('div', { class: 'char-sync-row' }, codeInput,
       el('button', {
         class: 'btn small',
@@ -130,10 +130,6 @@ export function renderCharacterPanel(root: HTMLElement, role: Role = 'GM') {
           renderAll();
         },
       }, '📥 导入'),
-    ),
-    el('div', { class: 'char-sync-links' },
-      el('a', { href: CARD_URL, target: '_blank', rel: 'noopener' }, '↗ 打开车卡工坊（新标签）'),
-      el('span', {}, '也可把车卡工坊的 manifest 加进枭雄工具栏，直接在房间内车卡'),
     ),
   );
 

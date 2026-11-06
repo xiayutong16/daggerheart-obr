@@ -25,7 +25,7 @@ interface ToolDef {
 const TOOLS: ToolDef[] = [
   {
     id: 'dice', icon: 'tool-dice.svg', label: '🎲 匕首之心 · 骰子面板',
-    url: `${SUITE_BASE}index.html?tab=dice&panel=1`, width: 460, height: 700,
+    url: `${SUITE_BASE}index.html?panel=1`, width: 460, height: 700,
   },
   {
     id: 'bestiary', icon: 'tool-bestiary.svg', label: '📖 怪物图鉴 · 仅 GM',
@@ -34,11 +34,7 @@ const TOOLS: ToolDef[] = [
   },
   {
     id: 'char', icon: 'tool-char.svg', label: '📋 我的角色卡',
-    url: `${SUITE_BASE}index.html?tab=char&panel=1`, width: 460, height: 700,
-  },
-  {
-    id: 'card', icon: 'tool-card.svg', label: '🃏 车卡工坊',
-    url: `${SUITE_BASE}card/index.html?panel=1`, width: 900, height: 720,
+    url: `${SUITE_BASE}char/index.html?panel=1`, width: 460, height: 700,
   },
 ];
 

@@ -9,7 +9,7 @@
 import OBR from '@owlbear-rodeo/sdk';
 import type { Item } from '@owlbear-rodeo/sdk';
 import type { CharData, Role } from './types';
-import { normalizeChar } from './charSync';
+import { normalizeChar, readLocalChar } from './charSync';
 import { loadChar } from './characterPanel';
 import { SUITE_BASE } from './sidebarTools';
 
@@ -94,7 +94,7 @@ export async function bindCharToItem(itemId: string, binding: CharBinding | null
 /** Right-click handler: bind (or refresh) the local player's sheet. */
 export async function bindCurrentChar(itemId: string, itemName: string): Promise<void> {
   if (!OBR.isAvailable) return;
-  const data = normalizeChar(loadChar());
+  const data = normalizeChar(readLocalChar() ?? loadChar());
   if (!data) { await OBR.notification.show('角色卡数据无效', 'ERROR'); return; }
   let ownerId = '';
   let ownerName = '玩家';
