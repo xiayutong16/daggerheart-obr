@@ -14,7 +14,8 @@ import type { Role } from './types';
 import rawEnemies from './data/enemies.json';
 import {
   setupContextMenu, startAutoCard, openPicker, closePicker, showCardFor, closeCard,
-  openBookModal, getBinding, setBinding, adjustBinding, listBoundTokens, onBindingsChange,
+  openBookModal, getBinding, setBinding, setBindingNumbers, adjustBinding,
+  listBoundTokens, onBindingsChange,
   rememberItemName, getCardTarget, getCardPos, moveCard, dockCard, startCardMessages,
   type Binding, type BoundToken, type CardTarget, type CardPos,
 } from './tokenBinding';
@@ -425,7 +426,7 @@ function tokensPane(): HTMLElement {
   const pane = el('div', { class: 'be-tokens' });
   pane.append(el('div', { class: 'be-enc-head' },
     el('div', {}, el('div', { class: 'be-sec-title' }, '🎭 场上头像'),
-      el('div', { class: 'be-hint' }, '右键头像 →「绑定怪物图鉴」。之后左键点它，怪物卡会自动浮出；按住卡片标题栏可拖动，也能一键停靠四角。')),
+      el('div', { class: 'be-hint' }, '右键头像 →「绑定怪物图鉴」。之后左键点它，怪物卡会自动浮出；按住卡片标题栏可拖动。生命 / 压力的当前值与上限都能直接输入修改。')),
     boundTokens.length
       ? el('button', { class: 'be-btn ghost small', onclick: () => { void (async () => { for (const t of boundTokens) await setBinding(t.itemId, null); await refreshBoundTokens(); render(); })(); } }, '全部解绑')
       : null,
@@ -436,8 +437,9 @@ function tokensPane(): HTMLElement {
   }
   for (const t of boundTokens) {
     const e = enemyById(t.binding.enemyId);
-    const hpMax = e?.hp ?? Math.max(t.binding.hp, 1);
-    const stressMax = e?.stress ?? Math.max(t.binding.stress, 1);
+    const hpMax = t.binding.hpMax ?? e?.hp ?? Math.max(t.binding.hp, 1);
+    const stressMax = t.binding.stressMax ?? e?.stress ?? Math.max(t.binding.stress, 1);
+    const refreshTokens = () => { void refreshBoundTokens().then(render); };
     pane.append(el('div', { class: 'be-unit' + (t.binding.hp === 0 ? ' down' : '') },
       el('div', { class: 'be-unit-top' },
         el('span', { class: 'be-avatar-tag' }, '头像'),
@@ -450,16 +452,16 @@ function tokensPane(): HTMLElement {
       ),
       el('div', { class: 'be-track' },
         el('span', { class: 'be-track-label hp' }, '生命'),
-        el('button', { class: 'be-step', onclick: () => void adjustBinding(t.itemId, 'hp', -1, hpMax).then(() => void refreshBoundTokens().then(render)) }, '−'),
-        el('span', { class: 'be-track-val' }, `${t.binding.hp} / ${hpMax}`),
-        el('button', { class: 'be-step', onclick: () => void adjustBinding(t.itemId, 'hp', 1, hpMax).then(() => void refreshBoundTokens().then(render)) }, '+'),
+        el('button', { class: 'be-step', onclick: () => void adjustBinding(t.itemId, 'hp', -1, hpMax).then(refreshTokens) }, '−'),
+        trackValueInputs(t.itemId, 'hp', t.binding.hp, hpMax, refreshTokens),
+        el('button', { class: 'be-step', onclick: () => void adjustBinding(t.itemId, 'hp', 1, hpMax).then(refreshTokens) }, '+'),
         el('div', { class: 'be-bar' }, el('div', { class: 'be-bar-fill hp', style: `width:${hpMax ? (t.binding.hp / hpMax) * 100 : 0}%` })),
       ),
       el('div', { class: 'be-track' },
         el('span', { class: 'be-track-label stress' }, '压力'),
-        el('button', { class: 'be-step', onclick: () => void adjustBinding(t.itemId, 'stress', -1, stressMax).then(() => void refreshBoundTokens().then(render)) }, '−'),
-        el('span', { class: 'be-track-val' }, `${t.binding.stress} / ${stressMax}`),
-        el('button', { class: 'be-step', onclick: () => void adjustBinding(t.itemId, 'stress', 1, stressMax).then(() => void refreshBoundTokens().then(render)) }, '+'),
+        el('button', { class: 'be-step', onclick: () => void adjustBinding(t.itemId, 'stress', -1, stressMax).then(refreshTokens) }, '−'),
+        trackValueInputs(t.itemId, 'stress', t.binding.stress, stressMax, refreshTokens),
+        el('button', { class: 'be-step', onclick: () => void adjustBinding(t.itemId, 'stress', 1, stressMax).then(refreshTokens) }, '+'),
         el('div', { class: 'be-bar' }, el('div', { class: 'be-bar-fill stress', style: `width:${stressMax ? (t.binding.stress / stressMax) * 100 : 0}%` })),
       ),
       el('div', { class: 'be-unit-actions' },
@@ -574,11 +576,51 @@ function renderPickerRows(list: HTMLElement) {
 }
 
 // ---------- floating stat card ----------
-function trackRow(label: string, cls: string, value: number, max: number, onStep: (d: number) => void) {
+/** Two GM-editable number boxes (current / cap) shared by card and 场上 list. */
+function trackValueInputs(
+  itemId: string,
+  field: 'hp' | 'stress',
+  value: number,
+  max: number,
+  after: () => void,
+): HTMLElement {
+  const cur = el('input', {
+    class: 'be-num', type: 'number', min: '0', value: String(value),
+    title: '当前值 · 直接输入即可修改',
+  }) as HTMLInputElement;
+  const cap = el('input', {
+    class: 'be-num', type: 'number', min: '0', value: String(max),
+    title: '上限 · 直接输入即可修改',
+  }) as HTMLInputElement;
+  const commit = () => {
+    const nv = Math.max(0, Math.round(Number(cur.value) || 0));
+    const nm = Math.max(0, Math.round(Number(cap.value) || 0));
+    void setBindingNumbers(itemId, field === 'hp' ? { hp: nv, hpMax: nm } : { stress: nv, stressMax: nm })
+      .then(after);
+  };
+  cur.addEventListener('change', commit);
+  cap.addEventListener('change', commit);
+  for (const input of [cur, cap]) {
+    input.addEventListener('keydown', (e) => {
+      if ((e as KeyboardEvent).key === 'Enter') (e.target as HTMLInputElement).blur();
+    });
+  }
+  return el('span', { class: 'be-track-val edit' }, cur,
+    el('span', { class: 'be-slash' }, '/'), cap);
+}
+
+function trackRow(
+  label: string,
+  cls: string,
+  value: number,
+  max: number,
+  valueNode: HTMLElement,
+  onStep: (d: number) => void,
+) {
   return el('div', { class: 'be-track' },
     el('span', { class: `be-track-label ${cls}` }, label),
     el('button', { class: 'be-step', onclick: () => onStep(-1) }, '−'),
-    el('span', { class: 'be-track-val' }, `${value} / ${max}`),
+    valueNode,
     el('button', { class: 'be-step', onclick: () => onStep(1) }, '+'),
     el('div', { class: 'be-bar' }, el('div', { class: `be-bar-fill ${cls}`, style: `width:${max ? (value / max) * 100 : 0}%` })),
   );
@@ -649,8 +691,12 @@ async function renderCard() {
   }
 
   const th = e.thresholds || [];
+  const hpMax = b.hpMax ?? e.hp;
+  const stressMax = b.stressMax ?? e.stress;
+  const redrawCard = () => { void renderCard(); };
   const step = (field: 'hp' | 'stress', delta: number) => {
-    void adjustBinding(itemId, field, delta, field === 'hp' ? e.hp : e.stress).then(() => void renderCard());
+    const max = field === 'hp' ? hpMax : stressMax;
+    void adjustBinding(itemId, field, delta, max).then(redrawCard);
   };
 
   const dockBtn = (arrow: string, label: string, corner: 'tl' | 'tr' | 'bl' | 'br') =>
@@ -687,8 +733,11 @@ async function renderCard() {
     stat('攻击', e.attack ? (e.attack.damage || e.attack.line).slice(0, 14) : '无', 'hp'),
   );
   const tracks = el('div', { class: 'be-card-tracks' },
-    trackRow('生命', 'hp', b.hp, e.hp, d => step('hp', d)),
-    trackRow('压力', 'stress', b.stress, e.stress, d => step('stress', d)),
+    el('div', { class: 'be-track-tip' }, '✎ 当前值与上限都能直接输入修改 · 改动随场景保存'),
+    trackRow('生命', 'hp', b.hp, hpMax,
+      trackValueInputs(itemId, 'hp', b.hp, hpMax, redrawCard), d => step('hp', d)),
+    trackRow('压力', 'stress', b.stress, stressMax,
+      trackValueInputs(itemId, 'stress', b.stress, stressMax, redrawCard), d => step('stress', d)),
   );
 
   const info = el('div', { class: 'be-card-info' });
@@ -737,7 +786,7 @@ function denied() {
   root.append(el('div', { class: 'be-denied' },
     el('div', { class: 'be-denied-icon' }, '🔒'),
     el('div', { class: 'be-denied-title' }, '仅 GM 可用'),
-    el('div', { class: 'be-denied-text' }, '怪物图鉴包含敌人的数值、特性与动机战术。玩家端不会加载任何敌人数据，右键绑定菜单与左键怪物卡也只对 GM 生效。'),
+    el('div', { class: 'be-denied-text' }, '怪物图鉴包含敌人的数值、特性与动机战术。玩家端不会渲染任何敌人内容，右键绑定菜单与左键怪物卡也只对 GM 注册。'),
   ));
 }
 

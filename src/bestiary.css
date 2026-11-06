@@ -246,3 +246,15 @@ button { cursor: pointer; }
 .be-dock:hover { color: var(--text); border-color: var(--accent); }
 .be-card-diff-tip { font-size: 10px; color: var(--muted); white-space: nowrap; }
 .be-card-empty .be-btn { margin-top: 4px; }
+
+/* ---- GM-editable HP / Stress numbers ---- */
+.be-track-val.edit { display: inline-flex; align-items: center; gap: 3px; width: auto; flex: 0 0 auto; }
+.be-num { width: 36px; padding: 3px 2px; border-radius: 5px; border: 1px solid var(--line);
+  background: var(--bg); color: var(--text); font-family: var(--font); font-size: 11px;
+  text-align: center; font-variant-numeric: tabular-nums; appearance: textfield; -moz-appearance: textfield; }
+.be-num:focus { border-color: var(--accent); outline: none; }
+.be-num::-webkit-inner-spin-button, .be-num::-webkit-outer-spin-button {
+  -webkit-appearance: none; appearance: none; margin: 0; opacity: 0; }
+.be-slash { font-size: 10px; color: var(--muted); }
+.be-track-tip { font-size: 10px; color: var(--muted); margin-bottom: 6px; }
+.be-card-tracks .be-track-tip + .be-track { margin-top: 0; }

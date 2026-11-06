@@ -26,6 +26,9 @@ export interface Binding {
   enemyId: string;
   hp: number;
   stress: number;
+  /** GM-editable maxima. When absent the compendium's value is used. */
+  hpMax?: number;
+  stressMax?: number;
 }
 export interface BoundToken {
   itemId: string;
@@ -138,6 +141,23 @@ export function getCardPos(): CardPos | null {
 }
 
 // ---------- reading / writing bindings ----------
+function clampInt(v: unknown, fallback = 0): number {
+  const n = Math.round(Number(v));
+  return Number.isFinite(n) && n >= 0 ? n : fallback;
+}
+/** Keep current values inside the (GM-editable) maxima after any edit. */
+function withNumbers(base: Binding, patch: Partial<Binding>): Binding {
+  const merged: Binding = { ...base, ...patch };
+  const hpMax = clampInt(merged.hpMax ?? merged.hp);
+  const stressMax = clampInt(merged.stressMax ?? merged.stress);
+  return {
+    ...merged,
+    hpMax, stressMax,
+    hp: Math.min(hpMax, clampInt(merged.hp)),
+    stress: Math.min(stressMax, clampInt(merged.stress)),
+  };
+}
+
 export function readBinding(item?: Item): Binding | null {
   if (!item) return null;
   const raw = item.metadata?.[META_KEY];
@@ -146,8 +166,10 @@ export function readBinding(item?: Item): Binding | null {
   if (typeof b.enemyId !== 'string') return null;
   return {
     enemyId: b.enemyId,
-    hp: Number.isFinite(Number(b.hp)) ? Number(b.hp) : 0,
-    stress: Number.isFinite(Number(b.stress)) ? Number(b.stress) : 0,
+    hp: clampInt(b.hp),
+    stress: clampInt(b.stress),
+    hpMax: b.hpMax == null ? undefined : clampInt(b.hpMax),
+    stressMax: b.stressMax == null ? undefined : clampInt(b.stressMax),
   };
 }
 
@@ -175,16 +197,15 @@ export async function setBinding(itemId: string, binding: Binding | null): Promi
   });
 }
 
-export async function adjustBinding(
+/** GM typed new numbers straight into the card / bound-token list. */
+export async function setBindingNumbers(
   itemId: string,
-  field: 'hp' | 'stress',
-  delta: number,
-  max: number,
+  patch: Partial<Binding>,
 ): Promise<Binding | null> {
   if (!OBR.isAvailable) {
     const cur = localBindings()[itemId];
     if (!cur) return null;
-    const next: Binding = { ...cur, [field]: Math.max(0, Math.min(max, cur[field] + delta)) };
+    const next = withNumbers(cur, patch);
     await setBinding(itemId, next);
     return next;
   }
@@ -192,7 +213,34 @@ export async function adjustBinding(
     for (const it of items) {
       const b = readBinding(it as Item);
       if (!b) continue;
-      it.metadata[META_KEY] = { ...b, [field]: Math.max(0, Math.min(max, b[field] + delta)) };
+      it.metadata[META_KEY] = withNumbers(b, patch);
+    }
+  });
+  return getBinding(itemId);
+}
+
+export async function adjustBinding(
+  itemId: string,
+  field: 'hp' | 'stress',
+  delta: number,
+  fallbackMax: number,
+): Promise<Binding | null> {
+  const cap = (b: Binding) => (field === 'hp' ? (b.hpMax ?? fallbackMax) : (b.stressMax ?? fallbackMax));
+  const maxKey = field === 'hp' ? 'hpMax' : 'stressMax';
+  if (!OBR.isAvailable) {
+    const cur = localBindings()[itemId];
+    if (!cur) return null;
+    const max = cap(cur);
+    const next: Binding = { ...cur, [field]: Math.max(0, Math.min(max, cur[field] + delta)), [maxKey]: max };
+    await setBinding(itemId, next);
+    return next;
+  }
+  await OBR.scene.items.updateItems([itemId], (items) => {
+    for (const it of items) {
+      const b = readBinding(it as Item);
+      if (!b) continue;
+      const max = cap(b);
+      it.metadata[META_KEY] = { ...b, [field]: Math.max(0, Math.min(max, b[field] + delta)), [maxKey]: max };
     }
   });
   return getBinding(itemId);
