@@ -3,22 +3,22 @@
 // All 139 adversaries from the Chinese SRD wiki are bundled as JSON, so the panel
 // works offline and never has to fight CORS from inside the Owlbear iframe.
 //
-// This single page serves four views:
-//   ?mode=book              main compendium + encounter tracker + bound tokens
-//   ?mode=picker&item=<id>  bind one scene token to an adversary (opened by right click)
-//   ?mode=card&item=<id>    fast stat card for a bound token (opened by right click)
-//   (default)               same as book
+// Views served by this single page:
+//   (default)               main compendium + encounter tracker + bound tokens
+//   ?mode=picker&item=<id>  bind one scene token to an adversary (right-click)
+//   ?mode=card              floating stat card, opened automatically on left-click
 import OBR from '@owlbear-rodeo/sdk';
 import './bestiary.css';
 import { el, clear } from './dom';
 import type { Role } from './types';
-import { getDifficulty, onDifficulty, setDifficulty, startDifficulty } from './difficulty';
 import rawEnemies from './data/enemies.json';
 import {
-  setupContextMenu, openPicker, closePicker, openCard, closeCard, openBookModal,
-  getBinding, setBinding, adjustBinding, listBoundTokens, onBindingsChange,
-  rememberItemName, type Binding, type BoundToken,
+  setupContextMenu, startAutoCard, openPicker, closePicker, showCardFor, closeCard,
+  openBookModal, getBinding, setBinding, adjustBinding, listBoundTokens, onBindingsChange,
+  rememberItemName, getCardTarget, getCardPos, moveCard, dockCard, startCardMessages,
+  type Binding, type BoundToken, type CardTarget, type CardPos,
 } from './tokenBinding';
+import { sendQuickRoll, parseDamage, parseBonus, newQuickId } from './quickRolls';
 
 interface Feature { name: string; desc: string }
 interface Attack { bonus: string; weapon: string; range: string; damage: string; line: string }
@@ -53,12 +53,15 @@ let type = '';
 let sort: 'tier' | 'difficulty' | 'name' = 'tier';
 let selected: string | null = null;
 let tab: 'book' | 'encounter' | 'tokens' = 'book';
-let sharedDiff: number | null = getDifficulty();
 
 let boundTokens: BoundToken[] = [];
 let pickerQuery = '';
 let pickerTier = 0;
 let cardExpanded = false;
+let cardTarget: CardTarget | null = null;
+let drag: { active: boolean; startX: number; startY: number; pos: CardPos } | null = null;
+let lastDragMove = 0;
+let pendingPos: CardPos | null = null;
 
 // ---------- persistence (memory first: Owlbear iframes may block localStorage) ----------
 function loadUnits(): Unit[] {
@@ -83,15 +86,8 @@ function toast(msg: string, tone: 'ok' | 'warn' = 'ok') {
   document.body.append(t);
   setTimeout(() => t.remove(), 2800);
 }
-function rootEl(): HTMLElement {
-  return document.getElementById('bestiary')!;
-}
-function enemyById(id: string): Enemy | undefined {
-  return enemies.find(e => e.id === id);
-}
-function diffLabel(v: number | null) {
-  return v != null ? `对抗难度 ${v}` : '未设对抗难度';
-}
+function rootEl(): HTMLElement { return document.getElementById('bestiary')!; }
+function enemyById(id: string): Enemy | undefined { return enemies.find(e => e.id === id); }
 function featureLabel(name: string): { text: string; cls: string } | null {
   const m = name.match(/-\s*(被动|动作|反应|恐惧特性|特殊)\s*$/);
   if (!m) return /恐惧/.test(name) ? { text: '恐惧', cls: 'fear' } : null;
@@ -126,13 +122,6 @@ function filtered(o: Partial<ListOpts> = {}): Enemy[] {
   return out;
 }
 
-function setSharedDifficulty(n: number) {
-  setDifficulty(n);
-  sharedDiff = n;
-  const label = document.querySelector('.be-diff');
-  if (label) label.textContent = diffLabel(n);
-  toast(`已同步给全场 · 对抗难度 ${n}`);
-}
 function addUnit(e: Enemy) {
   units.push({ uid: uid(), id: e.id, name: e.name, hp: e.hp, hpMax: e.hp,
     stress: e.stress, stressMax: e.stress, difficulty: e.difficulty, tier: e.tier });
@@ -147,10 +136,34 @@ function adjust(u: Unit, field: 'hp' | 'stress', delta: number) {
   render();
 }
 
-// ---------- binding helpers ----------
-async function refreshBoundTokens() {
-  boundTokens = await listBoundTokens();
+// ---------- send attack / damage formulas to the main dice panel ----------
+function pushAttack(e: Enemy, part: 'hit' | 'damage', quiet = false): boolean {
+  const a = e.attack;
+  if (!a) return false;
+  const source = `${e.name} · ${a.weapon || '攻击'}`;
+  if (part === 'hit') {
+    sendQuickRoll({
+      id: newQuickId(), ts: Date.now(), source, kind: 'attack',
+      label: `命中 ${a.bonus || '+0'}`, bonus: parseBonus(a.bonus),
+    });
+    if (!quiet) toast('已把「命中」加入投骰界面 · 可选普通 / 优势 / 劣势');
+    return true;
+  }
+  const text = a.damage || a.line;
+  const d = parseDamage(text);
+  if (!d) { toast(`无法解析伤害「${text}」，请手动投掷`, 'warn'); return false; }
+  sendQuickRoll({ id: newQuickId(), ts: Date.now(), source, kind: 'damage', label: text, dice: d });
+  if (!quiet) toast('已把「伤害」加入投骰界面 · 可勾选「重击」');
+  return true;
 }
+function pushBoth(e: Enemy) {
+  const a = pushAttack(e, 'hit', true);
+  const b = pushAttack(e, 'damage', true);
+  if (a && b) toast('已把「命中 + 伤害」一起加入投骰界面');
+}
+
+// ---------- binding helpers ----------
+async function refreshBoundTokens() { boundTokens = await listBoundTokens(); }
 async function bindEnemyToSelection(e: Enemy) {
   if (!OBR.isAvailable) { toast('请在枭雄里选中一个头像后再绑定', 'warn'); return; }
   try {
@@ -161,7 +174,7 @@ async function bindEnemyToSelection(e: Enemy) {
     const name = items[0]?.name || '头像';
     rememberItemName(itemId, name);
     await setBinding(itemId, { enemyId: e.id, hp: e.hp, stress: e.stress });
-    toast(`「${name}」已绑定 ${e.name} · 右键即可查看怪物卡`);
+    toast(`「${name}」已绑定 ${e.name} · 左键点它即可查看怪物卡`);
     await refreshBoundTokens();
     render();
   } catch {
@@ -181,8 +194,14 @@ async function itemDisplayName(itemId: string): Promise<string> {
     return items[0]?.name || '未命名头像';
   } catch { return '未命名头像'; }
 }
+function loadCardTarget(): CardTarget | null {
+  const t = getCardTarget();
+  if (t) return t;
+  if (TARGET_ITEM && TARGET_ENEMY) return { itemId: TARGET_ITEM, enemyId: TARGET_ENEMY, name: TARGET_NAME };
+  return null;
+}
 
-// ---------- main compendium: header / toolbar / list ----------
+// ---------- main compendium ----------
 async function selectTab(id: typeof tab) {
   tab = id;
   if (id === 'tokens') await refreshBoundTokens();
@@ -195,9 +214,9 @@ function header() {
       el('div', { class: 'be-title' }, '📖 怪物图鉴'),
       el('span', { class: 'be-role' }, role === 'GM' ? 'GM 专用' : '玩家'),
       el('div', { class: 'be-spacer' }),
-      el('span', { class: 'be-diff' }, diffLabel(sharedDiff)),
+      el('span', { class: 'be-head-tip' }, '左键点头像 → 怪物卡'),
     ),
-    el('div', { class: 'be-sub' }, `《核心规则书》 ${enemies.length} 条敌人 · 内置离线数据 · 右键头像可绑定并速查`),
+    el('div', { class: 'be-sub' }, `《核心规则书》 ${enemies.length} 条敌人 · 点攻击数值即可送骰到投掷面板`),
     el('div', { class: 'be-tabs' },
       el('button', { class: 'be-tab' + (tab === 'book' ? ' active' : ''), onclick: () => void selectTab('book') }, '图鉴'),
       el('button', { class: 'be-tab' + (tab === 'encounter' ? ' active' : ''), onclick: () => void selectTab('encounter') },
@@ -211,12 +230,8 @@ function header() {
 function toolbar() {
   const search = el('input', {
     class: 'be-search', type: 'search', placeholder: '搜索名称 / 原文 / 特性 / 描述…', value: query,
-    oninput: (e: Event) => {
-      query = (e.target as HTMLInputElement).value;
-      renderListOnly();
-    },
+    oninput: (e: Event) => { query = (e.target as HTMLInputElement).value; renderListOnly(); },
   }) as HTMLInputElement;
-
   const tierBar = el('div', { class: 'be-chips' });
   for (const t of [0, 1, 2, 3, 4]) {
     tierBar.append(el('button', {
@@ -224,7 +239,6 @@ function toolbar() {
       onclick: () => { tier = t; render(); },
     }, t === 0 ? '全部位阶' : `位阶 ${t}`));
   }
-
   const typeSel = el('select', {
     class: 'be-select',
     onchange: (e: Event) => { type = (e.target as HTMLSelectElement).value; render(); },
@@ -232,7 +246,6 @@ function toolbar() {
   typeSel.append(el('option', { value: '' }, '全部种类'));
   for (const t of TYPES) typeSel.append(el('option', { value: t }, t));
   typeSel.value = type;
-
   const sortSel = el('select', {
     class: 'be-select',
     onchange: (e: Event) => { sort = (e.target as HTMLSelectElement).value as typeof sort; render(); },
@@ -241,12 +254,8 @@ function toolbar() {
     sortSel.append(el('option', { value: v }, label));
   }
   sortSel.value = sort;
-
-  return el('div', { class: 'be-toolbar' },
-    search,
-    tierBar,
-    el('div', { class: 'be-select-row' }, typeSel, sortSel, el('span', { class: 'be-count' }, '')),
-  );
+  return el('div', { class: 'be-toolbar' }, search, tierBar,
+    el('div', { class: 'be-select-row' }, typeSel, sortSel, el('span', { class: 'be-count' }, '')));
 }
 
 function listItem(e: Enemy) {
@@ -260,19 +269,14 @@ function listItem(e: Enemy) {
       el('span', { class: 'be-item-diff' }, `难度 ${e.difficulty}`),
     ),
     el('div', { class: 'be-item-sub' },
-      el('span', {}, e.type),
-      el('span', { class: 'be-dot' }, '·'),
-      el('span', {}, `HP ${e.hp}`),
-      el('span', { class: 'be-dot' }, '·'),
+      el('span', {}, e.type), el('span', { class: 'be-dot' }, '·'),
+      el('span', {}, `HP ${e.hp}`), el('span', { class: 'be-dot' }, '·'),
       el('span', {}, `压力 ${e.stress}`),
     ),
     el('div', { class: 'be-item-en' }, e.original),
   );
 }
-
-function listPane(): HTMLElement {
-  return el('div', { class: 'be-list', id: 'be-list' });
-}
+function listPane(): HTMLElement { return el('div', { class: 'be-list', id: 'be-list' }); }
 function renderListInto(list: HTMLElement) {
   clear(list);
   const rows = filtered();
@@ -288,12 +292,10 @@ function renderListOnly() {
   const list = document.getElementById('be-list');
   if (list) renderListInto(list as HTMLElement);
 }
-
 function stat(label: string, value: string, cls = '') {
   return el('div', { class: `be-stat ${cls}` },
     el('div', { class: 'be-stat-label' }, label),
-    el('div', { class: 'be-stat-value' }, value),
-  );
+    el('div', { class: 'be-stat-value' }, value));
 }
 
 function detailPane(): HTMLElement {
@@ -303,12 +305,12 @@ function detailPane(): HTMLElement {
     pane.append(el('div', { class: 'be-placeholder' },
       el('div', { class: 'be-ph-icon' }, '📖'),
       el('div', { class: 'be-ph-title' }, '从左侧选一个敌人'),
-      el('div', { class: 'be-ph-text' }, '可以看到它的难度、阈值、攻击、经历与全部特性。点「设为对抗难度」会把数值实时推给全场玩家的骰子面板；也可以在场景里右键头像直接绑定。'),
+      el('div', { class: 'be-ph-text' }, '可以看到它的难度、阈值、攻击、经历与全部特性。点攻击或命中数值可把骰子组合送到主插件的投掷面板。'),
     ));
     return pane;
   }
 
-  const head = el('div', { class: 'be-d-head' },
+  pane.append(el('div', { class: 'be-d-head' },
     el('div', { class: 'be-d-title' }, e.name),
     el('div', { class: 'be-d-en' }, e.original),
     el('div', { class: 'be-d-tags' },
@@ -319,8 +321,7 @@ function detailPane(): HTMLElement {
     ),
     e.description ? el('div', { class: 'be-d-desc' }, e.description) : null,
     e.motives ? el('div', { class: 'be-d-motive' }, el('b', {}, '动机与战术：'), e.motives) : null,
-  );
-  pane.append(head);
+  ));
 
   const th = e.thresholds || [];
   pane.append(el('div', { class: 'be-stats' },
@@ -331,21 +332,26 @@ function detailPane(): HTMLElement {
   ));
 
   if (e.attack) {
+    const a = e.attack;
     pane.append(el('div', { class: 'be-attack' },
-      el('div', { class: 'be-sec-title' }, '⚔ 攻击'),
+      el('div', { class: 'be-sec-title' }, '⚔ 攻击 · 点数值送骰'),
       el('div', { class: 'be-attack-row' },
         el('div', { class: 'be-attack-main' },
-          el('b', {}, e.attack.weapon || '普通攻击'),
-          el('span', { class: 'be-attack-range' }, e.attack.range),
+          el('b', {}, a.weapon || '普通攻击'),
+          el('span', { class: 'be-attack-range' }, a.range),
         ),
-        el('div', { class: 'be-attack-dmg' }, e.attack.damage || e.attack.line),
-        el('div', { class: 'be-attack-bonus' }, e.attack.bonus ? `命中 ${e.attack.bonus}` : ''),
+        el('button', { class: 'be-attack-dmg as-link', title: '点击把伤害骰加入投掷面板', onclick: () => pushAttack(e, 'damage') },
+          a.damage || a.line),
+        el('button', { class: 'be-attack-bonus as-link', title: '点击把命中检定加入投掷面板', onclick: () => pushAttack(e, 'hit') },
+          a.bonus ? `命中 ${a.bonus}` : '命中 +0'),
+      ),
+      el('div', { class: 'be-attack-extra' },
+        el('button', { class: 'be-roll-link both', onclick: () => pushBoth(e) }, '⚔ 命中 + 伤害 一起加入'),
+        el('span', { class: 'be-roll-hint' }, '命中可选普通 / 优势 / 劣势，伤害可勾选匕首之心重击。'),
       ),
     ));
   }
-  if (e.experiences) {
-    pane.append(el('div', { class: 'be-exp' }, el('b', {}, '经历：'), e.experiences));
-  }
+  if (e.experiences) pane.append(el('div', { class: 'be-exp' }, el('b', {}, '经历：'), e.experiences));
 
   if (e.features.length) {
     const box = el('div', { class: 'be-features' });
@@ -353,10 +359,8 @@ function detailPane(): HTMLElement {
     for (const f of e.features) {
       const tag = featureLabel(f.name);
       box.append(el('div', { class: 'be-feature' },
-        el('div', { class: 'be-feature-name' },
-          cleanFeatureName(f.name),
-          tag ? el('span', { class: `be-ftag ${tag.cls}` }, tag.text) : null,
-        ),
+        el('div', { class: 'be-feature-name' }, cleanFeatureName(f.name),
+          tag ? el('span', { class: `be-ftag ${tag.cls}` }, tag.text) : null),
         f.desc ? el('div', { class: 'be-feature-desc' }, f.desc) : null,
       ));
     }
@@ -364,15 +368,13 @@ function detailPane(): HTMLElement {
   }
 
   pane.append(el('div', { class: 'be-actions' },
-    el('button', { class: 'be-btn primary', onclick: () => setSharedDifficulty(e.difficulty) }, '🎯 设为对抗难度'),
-    el('button', { class: 'be-btn', onclick: () => addUnit(e) }, '＋ 加入遭遇'),
+    el('button', { class: 'be-btn primary', onclick: () => addUnit(e) }, '＋ 加入遭遇'),
     el('button', { class: 'be-btn', onclick: () => void bindEnemyToSelection(e) }, '🔗 绑定选中头像'),
     el('button', { class: 'be-btn ghost', onclick: () => window.open(e.url, '_blank', 'noopener') }, '↗ 维基原文'),
   ));
   return pane;
 }
 
-// ---------- main compendium: encounter + bound tokens ----------
 function encounterPane(): HTMLElement {
   const pane = el('div', { class: 'be-encounter' });
   pane.append(el('div', { class: 'be-enc-head' },
@@ -412,7 +414,6 @@ function encounterPane(): HTMLElement {
         el('div', { class: 'be-bar' }, el('div', { class: 'be-bar-fill stress', style: `width:${u.stressMax ? (u.stress / u.stressMax) * 100 : 0}%` })),
       ),
       el('div', { class: 'be-unit-actions' },
-        el('button', { class: 'be-link', onclick: () => setSharedDifficulty(u.difficulty) }, '设为对抗难度'),
         el('button', { class: 'be-link', onclick: () => { selected = u.id; tab = 'book'; render(); } }, '查看图鉴'),
       ),
     ));
@@ -424,14 +425,13 @@ function tokensPane(): HTMLElement {
   const pane = el('div', { class: 'be-tokens' });
   pane.append(el('div', { class: 'be-enc-head' },
     el('div', {}, el('div', { class: 'be-sec-title' }, '🎭 场上头像'),
-      el('div', { class: 'be-hint' }, '在场景里右键一个头像 →「绑定怪物图鉴」。绑定信息存在该头像上，随场景保存；右键「查看怪物卡」即可速查并改动生命 / 压力。')),
+      el('div', { class: 'be-hint' }, '右键头像 →「绑定怪物图鉴」。之后左键点它，怪物卡会自动浮出；按住卡片标题栏可拖动，也能一键停靠四角。')),
     boundTokens.length
       ? el('button', { class: 'be-btn ghost small', onclick: () => { void (async () => { for (const t of boundTokens) await setBinding(t.itemId, null); await refreshBoundTokens(); render(); })(); } }, '全部解绑')
       : null,
   ));
   if (!boundTokens.length) {
-    pane.append(el('div', { class: 'be-empty' },
-      '还没有绑定头像。\n在场景里选中一个怪物头像 → 右键 → 点链条图标，就能把它和图鉴条目绑起来。'));
+    pane.append(el('div', { class: 'be-empty' }, '还没有绑定头像。\n选中一个怪物头像 → 右键 → 点链条图标，就能把它和图鉴条目绑起来。'));
     return pane;
   }
   for (const t of boundTokens) {
@@ -463,8 +463,7 @@ function tokensPane(): HTMLElement {
         el('div', { class: 'be-bar' }, el('div', { class: 'be-bar-fill stress', style: `width:${stressMax ? (t.binding.stress / stressMax) * 100 : 0}%` })),
       ),
       el('div', { class: 'be-unit-actions' },
-        e ? el('button', { class: 'be-link', onclick: () => void openCard(t.itemId, e.id, t.name) }, '打开怪物卡') : null,
-        e ? el('button', { class: 'be-link', onclick: () => setSharedDifficulty(e.difficulty) }, '设为对抗难度') : null,
+        e ? el('button', { class: 'be-link', onclick: () => void showCardFor(t.itemId, e.id, t.name) }, '打开怪物卡') : null,
         el('button', { class: 'be-link', onclick: () => void openPicker(t.itemId, t.binding.enemyId, false, t.name) }, '更换绑定'),
         el('button', { class: 'be-link danger', onclick: () => void unbind(t.itemId).then(render) }, '解除绑定'),
       ),
@@ -492,17 +491,16 @@ function render() {
 async function chooseEnemy(e: Enemy) {
   if (!OBR.isAvailable) rememberItemName(TARGET_ITEM, await itemDisplayName(TARGET_ITEM));
   await setBinding(TARGET_ITEM, { enemyId: e.id, hp: e.hp, stress: e.stress });
-  toast(`已绑定「${e.name}」· 右键头像即可查看怪物卡`);
+  toast(`已绑定「${e.name}」· 左键点头像即可查看怪物卡`);
   if (OBR.isAvailable) {
     await closePicker();
   } else {
-    // Browser preview: no modal to close, show a confirmation instead.
     const r = rootEl();
     clear(r);
     r.append(el('div', { class: 'be-done' },
       el('div', { class: 'be-done-icon' }, '✅'),
       el('div', { class: 'be-done-title' }, `已绑定「${e.name}」`),
-      el('div', { class: 'be-done-text' }, '回到枭雄，右键这个头像 →「查看怪物卡」即可速查。'),
+      el('div', { class: 'be-done-text' }, '回到枭雄，左键点这个头像，怪物卡会自动浮出来。'),
       el('button', { class: 'be-btn primary', onclick: () => void renderPicker() }, '继续绑定其它头像'),
     ));
   }
@@ -513,7 +511,6 @@ async function renderPicker() {
   const name = await itemDisplayName(TARGET_ITEM);
   const current = CURRENT_ENEMY ? enemyById(CURRENT_ENEMY) : undefined;
   clear(r);
-
   const search = el('input', {
     class: 'be-search', type: 'search', placeholder: '搜索名称 / 原文 / 特性…', value: pickerQuery,
     oninput: (ev: Event) => {
@@ -522,19 +519,14 @@ async function renderPicker() {
       if (list) renderPickerRows(list as HTMLElement);
     },
   }) as HTMLInputElement;
-
   const chips = el('div', { class: 'be-chips' });
   for (const t of [0, 1, 2, 3, 4]) {
     chips.append(el('button', {
       class: 'be-chip' + (pickerTier === t ? ' active' : ''),
-      onclick: () => {
-        pickerTier = t;
-        void renderPicker();
-      },
+      onclick: () => { pickerTier = t; void renderPicker(); },
     }, t === 0 ? '全部位阶' : `位阶 ${t}`));
   }
-
-  const header = el('div', { class: 'be-picker-head' },
+  const head = el('div', { class: 'be-picker-head' },
     el('div', { class: 'be-title-row' },
       el('div', { class: 'be-title' }, '🔗 绑定怪物图鉴'),
       el('div', { class: 'be-spacer' }),
@@ -545,16 +537,12 @@ async function renderPicker() {
       ? el('div', { class: 'be-picker-current' }, '当前绑定：', el('b', {}, current.name),
         el('button', { class: 'be-link danger', onclick: () => void unbind(TARGET_ITEM).then(() => void closePicker()) }, '解除绑定'))
       : null,
-    PICKER_HINT
-      ? el('div', { class: 'be-picker-hint' }, '这个头像还没绑定怪物。先选一条，之后右键就能直接看怪物卡了。')
-      : null,
-    search,
-    chips,
+    PICKER_HINT ? el('div', { class: 'be-picker-hint' }, '这个头像还没绑定怪物。先选一条，之后左键点它就能直接看怪物卡。') : null,
+    search, chips,
   );
-
   const list = el('div', { class: 'be-picker-list', id: 'be-picker-list' });
-  r.append(header, list, el('div', { class: 'be-picker-foot' },
-    el('span', {}, '绑定信息保存在头像上，随场景同步；只有 GM 能看见右键菜单。'),
+  r.append(head, list, el('div', { class: 'be-picker-foot' },
+    el('span', {}, '绑定信息保存在头像上，随场景同步；只有 GM 能看见右键绑定菜单。'),
   ));
   renderPickerRows(list);
 }
@@ -562,10 +550,7 @@ async function renderPicker() {
 function renderPickerRows(list: HTMLElement) {
   clear(list);
   const rows = filtered({ q: pickerQuery, tier: pickerTier, type: '', sort: 'tier' });
-  if (!rows.length) {
-    list.append(el('div', { class: 'be-empty' }, '没有匹配的敌人，换个关键词试试。'));
-    return;
-  }
+  if (!rows.length) { list.append(el('div', { class: 'be-empty' }, '没有匹配的敌人，换个关键词试试。')); return; }
   for (const e of rows) {
     list.append(el('button', {
       class: 'be-picker-item' + (e.id === CURRENT_ENEMY ? ' current' : ''),
@@ -578,12 +563,9 @@ function renderPickerRows(list: HTMLElement) {
         el('span', { class: 'be-item-diff' }, `难度 ${e.difficulty}`),
       ),
       el('div', { class: 'be-item-sub' },
-        el('span', {}, e.type),
-        el('span', { class: 'be-dot' }, '·'),
-        el('span', {}, `HP ${e.hp}`),
-        el('span', { class: 'be-dot' }, '·'),
-        el('span', {}, `压力 ${e.stress}`),
-        el('span', { class: 'be-dot' }, '·'),
+        el('span', {}, e.type), el('span', { class: 'be-dot' }, '·'),
+        el('span', {}, `HP ${e.hp}`), el('span', { class: 'be-dot' }, '·'),
+        el('span', {}, `压力 ${e.stress}`), el('span', { class: 'be-dot' }, '·'),
         el('span', {}, `${e.features.length} 个特性`),
       ),
       el('div', { class: 'be-item-en' }, e.original),
@@ -591,7 +573,7 @@ function renderPickerRows(list: HTMLElement) {
   }
 }
 
-// ---------- fast stat card (opened as a popover from the right-click menu) ----------
+// ---------- floating stat card ----------
 function trackRow(label: string, cls: string, value: number, max: number, onStep: (d: number) => void) {
   return el('div', { class: 'be-track' },
     el('span', { class: `be-track-label ${cls}` }, label),
@@ -602,44 +584,84 @@ function trackRow(label: string, cls: string, value: number, max: number, onStep
   );
 }
 
+function wireCardDrag(handle: HTMLElement) {
+  handle.addEventListener('pointerdown', (ev) => {
+    if ((ev.target as HTMLElement).closest('button')) return;
+    drag = { active: true, startX: ev.clientX, startY: ev.clientY, pos: getCardPos() ?? { left: 0, top: 0 } };
+    try { handle.setPointerCapture(ev.pointerId); } catch { /* ignore */ }
+    handle.classList.add('dragging');
+  });
+  handle.addEventListener('pointermove', (ev) => {
+    if (!drag?.active) return;
+    pendingPos = {
+      left: drag.pos.left + (ev.clientX - drag.startX),
+      top: drag.pos.top + (ev.clientY - drag.startY),
+    };
+    const now = Date.now();
+    if (now - lastDragMove > 90) {
+      lastDragMove = now;
+      void moveCard(pendingPos.left, pendingPos.top);
+    }
+  });
+  const finish = (ev: PointerEvent) => {
+    if (!drag?.active) return;
+    drag.active = false;
+    handle.classList.remove('dragging');
+    try { handle.releasePointerCapture(ev.pointerId); } catch { /* ignore */ }
+    if (pendingPos) void moveCard(pendingPos.left, pendingPos.top);
+    pendingPos = null;
+  };
+  handle.addEventListener('pointerup', finish);
+  handle.addEventListener('pointercancel', finish);
+}
+
 async function renderCard() {
   const r = rootEl();
   clear(r);
-  const name = TARGET_NAME || await itemDisplayName(TARGET_ITEM);
+  const itemId = cardTarget?.itemId || TARGET_ITEM;
+  const name = cardTarget?.name || TARGET_NAME || await itemDisplayName(itemId);
 
-  let binding: Binding | null = await getBinding(TARGET_ITEM);
-  // Preview fallback: the URL can carry an enemy id when opened outside Owlbear.
-  // Never re-create a binding inside Owlbear — otherwise "解除绑定" would be
-  // undone by the next card refresh, which still has the enemy id in its URL.
-  if (!binding && TARGET_ENEMY && !OBR.isAvailable) {
-    const e0 = enemyById(TARGET_ENEMY);
+  const binding = itemId ? await getBinding(itemId) : null;
+  let e: Enemy | undefined;
+  let b: Binding | null = null;
+  if (binding) {
+    e = enemyById(binding.enemyId);
+    b = binding;
+  } else if (!OBR.isAvailable) {
+    // Preview fallback only. Inside Owlbear an unbound token must stay unbound,
+    // otherwise "解除绑定" would be undone by the next card refresh.
+    const e0 = enemyById(cardTarget?.enemyId || TARGET_ENEMY);
     if (e0) {
-      binding = { enemyId: e0.id, hp: e0.hp, stress: e0.stress };
-      await setBinding(TARGET_ITEM, binding);
+      b = { enemyId: e0.id, hp: e0.hp, stress: e0.stress };
+      await setBinding(itemId, b);
+      e = e0;
     }
   }
-  const e = binding ? enemyById(binding.enemyId) : undefined;
-  if (!e || !binding) {
+  if (!e || !b) {
     r.append(el('div', { class: 'be-card-empty' },
       el('div', { class: 'be-ph-icon' }, '🔗'),
       el('div', { class: 'be-ph-title' }, '这个头像还没绑定怪物'),
-      el('div', { class: 'be-ph-text' }, '从图鉴里选一条敌人，之后右键就能直接看到它的完整数值。'),
-      el('button', { class: 'be-btn primary', onclick: () => void openPicker(TARGET_ITEM) }, '去绑定'),
+      el('div', { class: 'be-ph-text' }, '右键它 →「绑定怪物图鉴」，之后左键点它就会自动浮出怪物卡。'),
+      el('button', { class: 'be-btn primary', onclick: () => void openPicker(itemId) }, '去绑定'),
+      el('button', { class: 'be-btn ghost small', onclick: () => void closeCard() }, '关闭'),
     ));
     return;
   }
 
-  const tokenName = name;
-  const b = binding;
   const th = e.thresholds || [];
   const step = (field: 'hp' | 'stress', delta: number) => {
-    void adjustBinding(TARGET_ITEM, field, delta, field === 'hp' ? e.hp : e.stress)
-      .then(() => void renderCard());
+    void adjustBinding(itemId, field, delta, field === 'hp' ? e.hp : e.stress).then(() => void renderCard());
   };
 
+  const dockBtn = (arrow: string, label: string, corner: 'tl' | 'tr' | 'bl' | 'br') =>
+    el('button', { class: 'be-dock', title: `停靠${label}`, onclick: () => void dockCard(corner) }, arrow);
   const top = el('div', { class: 'be-card-top' },
-    el('span', { class: 'be-avatar-tag' }, `🎭 ${tokenName}`),
+    el('span', { class: 'be-drag-grip', title: '按住这里拖动浮窗' }, '⠿'),
+    el('span', { class: 'be-avatar-tag' }, `🎭 ${name}`),
     el('div', { class: 'be-spacer' }),
+    el('div', { class: 'be-docks' },
+      dockBtn('↖', '左上', 'tl'), dockBtn('↗', '右上', 'tr'),
+      dockBtn('↙', '左下', 'bl'), dockBtn('↘', '右下', 'br')),
     el('button', { class: 'be-x', title: '关闭', onclick: () => void closeCard() }, '×'),
   );
 
@@ -655,16 +677,15 @@ async function renderCard() {
 
   const diff = el('div', { class: 'be-card-diff' },
     el('div', { class: 'be-card-diff-num' }, String(e.difficulty)),
-    el('div', { class: 'be-card-diff-label' }, '对抗难度'),
+    el('div', { class: 'be-card-diff-label' }, '该敌人的对抗难度'),
     el('div', { class: 'be-spacer' }),
-    el('button', { class: 'be-btn primary small', onclick: () => setSharedDifficulty(e.difficulty) }, '🎯 设为全场难度'),
+    el('span', { class: 'be-card-diff-tip' }, '数值仅作参考'),
   );
 
   const stats = el('div', { class: 'be-stats compact' },
     stat('阈值', th[0] == null && th[1] == null ? '无' : `${th[0] ?? '无'} / ${th[1] ?? '无'}`),
     stat('攻击', e.attack ? (e.attack.damage || e.attack.line).slice(0, 14) : '无', 'hp'),
   );
-
   const tracks = el('div', { class: 'be-card-tracks' },
     trackRow('生命', 'hp', b.hp, e.hp, d => step('hp', d)),
     trackRow('压力', 'stress', b.stress, e.stress, d => step('stress', d)),
@@ -672,9 +693,13 @@ async function renderCard() {
 
   const info = el('div', { class: 'be-card-info' });
   if (e.attack) {
-    info.append(el('div', { class: 'be-card-line' },
-      el('b', {}, '⚔ '), e.attack.weapon || '普通攻击', ' · ', e.attack.range, ' · ',
-      e.attack.bonus ? `命中 ${e.attack.bonus} · ` : '', e.attack.damage || e.attack.line));
+    const a = e.attack;
+    info.append(el('div', { class: 'be-card-line' }, el('b', {}, '⚔ '), a.weapon || '普通攻击', ' · ', a.range));
+    info.append(el('div', { class: 'be-roll-links compact' },
+      el('button', { class: 'be-roll-link hit', onclick: () => pushAttack(e, 'hit') }, '🎯 命中 ', a.bonus || '+0'),
+      el('button', { class: 'be-roll-link dmg', onclick: () => pushAttack(e, 'damage') }, '🎲 ', a.damage || a.line),
+      el('button', { class: 'be-roll-link both', onclick: () => pushBoth(e) }, '⚔ 一起加入'),
+    ));
   }
   if (e.experiences) info.append(el('div', { class: 'be-card-line' }, el('b', {}, '经历：'), e.experiences));
   if (e.description) info.append(el('div', { class: 'be-card-desc' }, e.description));
@@ -685,10 +710,8 @@ async function renderCard() {
   for (const f of shown) {
     const tag = featureLabel(f.name);
     features.append(el('div', { class: 'be-feature' },
-      el('div', { class: 'be-feature-name' },
-        cleanFeatureName(f.name),
-        tag ? el('span', { class: `be-ftag ${tag.cls}` }, tag.text) : null,
-      ),
+      el('div', { class: 'be-feature-name' }, cleanFeatureName(f.name),
+        tag ? el('span', { class: `be-ftag ${tag.cls}` }, tag.text) : null),
       f.desc ? el('div', { class: 'be-feature-desc' }, f.desc) : null,
     ));
   }
@@ -698,13 +721,14 @@ async function renderCard() {
   }
 
   const actions = el('div', { class: 'be-card-actions' },
-    el('button', { class: 'be-btn', onclick: () => void openPicker(TARGET_ITEM, e.id) }, '🔁 更换绑定'),
+    el('button', { class: 'be-btn', onclick: () => void openPicker(itemId, e.id, false, name) }, '🔁 更换绑定'),
     el('button', { class: 'be-btn', onclick: () => void openBookModal() }, '📖 完整图鉴'),
     el('button', { class: 'be-btn ghost', onclick: () => window.open(e.url, '_blank', 'noopener') }, '↗ 维基'),
-    el('button', { class: 'be-btn ghost danger', onclick: () => void unbind(TARGET_ITEM).then(() => void closeCard()) }, '✕ 解除绑定'),
+    el('button', { class: 'be-btn ghost danger', onclick: () => void unbind(itemId).then(() => void closeCard()) }, '✕ 解除绑定'),
   );
 
   r.append(top, head, diff, stats, tracks, info, features, actions);
+  wireCardDrag(top);
 }
 
 function denied() {
@@ -713,49 +737,52 @@ function denied() {
   root.append(el('div', { class: 'be-denied' },
     el('div', { class: 'be-denied-icon' }, '🔒'),
     el('div', { class: 'be-denied-title' }, '仅 GM 可用'),
-    el('div', { class: 'be-denied-text' }, '怪物图鉴包含敌人的数值、特性与动机战术。Owlbear 的扩展图标对所有人可见，但玩家端不会加载任何敌人数据，右键菜单也只对 GM 显示。'),
+    el('div', { class: 'be-denied-text' }, '怪物图鉴包含敌人的数值、特性与动机战术。玩家端不会加载任何敌人数据，右键绑定菜单与左键怪物卡也只对 GM 生效。'),
   ));
 }
 
 async function detectRole(): Promise<Role> {
   const override = new URLSearchParams(location.search).get('role');
   if (override === 'gm' || override === 'player') return override === 'gm' ? 'GM' : 'PLAYER';
-  if (!OBR.isAvailable) return 'GM'; // plain-browser preview
+  if (!OBR.isAvailable) return 'GM';
   try {
     await Promise.race([
       new Promise<void>(res => OBR.onReady(() => res())),
       new Promise<void>(res => setTimeout(res, 3000)),
     ]);
     return await OBR.player.getRole();
-  } catch {
-    return 'GM';
-  }
+  } catch { return 'GM'; }
 }
 
 async function boot() {
   role = await detectRole();
   const r = rootEl();
   r.className = `be-mode-${MODE}`;
-
   if (role !== 'GM') { denied(); return; }
-  startDifficulty('GM');
-  onDifficulty((v) => {
-    sharedDiff = v;
-    const label = document.querySelector('.be-diff');
-    if (label) label.textContent = diffLabel(v);
-  });
 
   if (MODE === 'picker') { void renderPicker(); return; }
+
   if (MODE === 'card') {
+    cardTarget = loadCardTarget();
+    let lastSwitchSig = JSON.stringify(cardTarget);
+    startCardMessages((m) => {
+      if (m.type !== 'switch') return;
+      const sig = JSON.stringify(m.target);
+      if (sig === lastSwitchSig) return;
+      lastSwitchSig = sig;
+      cardTarget = m.target;
+      cardExpanded = false;
+      void renderCard();
+    });
     void renderCard();
-    // Scene items change on every token move; only redraw when this token's
-    // own binding actually changed, so reading a long feature list is stable.
-    let lastSig = JSON.stringify(await getBinding(TARGET_ITEM));
+    const watchedItem = () => cardTarget?.itemId || TARGET_ITEM;
+    let lastSig = JSON.stringify(await getBinding(watchedItem()));
     let cardTimer: number | undefined;
     onBindingsChange(() => {
+      if (drag?.active) return;
       window.clearTimeout(cardTimer);
       cardTimer = window.setTimeout(async () => {
-        const sig = JSON.stringify(await getBinding(TARGET_ITEM));
+        const sig = JSON.stringify(await getBinding(watchedItem()));
         if (sig === lastSig) return;
         lastSig = sig;
         void renderCard();
@@ -764,7 +791,8 @@ async function boot() {
     return;
   }
 
-  // The main compendium iframe also owns the right-click menu registration.
+  // The main compendium iframe also owns the right-click menu and the
+  // left-click auto-card listener — both survive the panel being closed.
   if (OBR.isAvailable) {
     await new Promise<void>(res => {
       let done = false;
@@ -772,7 +800,8 @@ async function boot() {
       try { OBR.onReady(finish); } catch { finish(); }
       setTimeout(finish, 2500);
     });
-    try { await setupContextMenu(role); } catch (e) { console.warn('bestiary: context menu unavailable', e); }
+    try { await setupContextMenu(role); } catch (err) { console.warn('bestiary: context menu unavailable', err); }
+    try { startAutoCard(role); } catch (err) { console.warn('bestiary: auto card unavailable', err); }
   }
 
   let boundTimer: number | undefined;

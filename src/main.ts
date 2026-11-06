@@ -8,7 +8,7 @@ import { startRollLog, setLocalRole, resetRollLogListeners, onRemoteRoll, annota
 import { isSoundOn, toggleSound } from './sound';
 import { FEAR_MAX, gainFear, getFear } from './settle';
 import { refreshFearBoards } from './fearBoard';
-import { startDifficulty } from './difficulty';
+import { startQuickRolls } from './quickRolls';
 
 let currentTab = 'dice';
 let refreshChar: (() => void) | null = null;
@@ -70,7 +70,7 @@ function buildShell() {
       el('div', { class: 'head-actions' }, soundButton(), appState.embedded ? null : devToggle()),
     ),
     el('div', { class: 'app-sub' },
-      isGM ? 'Daggerheart · GM 视角（含难度与全局暗骰）' : 'Daggerheart · 玩家视角'),
+      isGM ? 'Daggerheart · GM 视角（含恐惧池与全局暗骰）' : 'Daggerheart · 玩家视角'),
   );
 
   const tabs = el('div', { class: 'tabs' });
@@ -141,7 +141,7 @@ async function init() {
 
   setLocalRole(appState.role);
   startRollLog();
-  startDifficulty(appState.role);
+  startQuickRolls();
   wireRemoteSettle();
   buildShell();
 }

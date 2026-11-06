@@ -218,3 +218,31 @@ button { cursor: pointer; }
 .be-card-actions .be-btn { flex: 1 1 auto; }
 .be-card-empty { height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 26px; gap: 9px; }
 .be-card-empty .be-ph-text { max-width: 260px; }
+
+/* ---- clickable attack numbers -> dice panel ---- */
+.be-head-tip { font-size: 10px; color: var(--muted); background: var(--bg-3); border: 1px solid var(--line); padding: 3px 8px; border-radius: 20px; white-space: nowrap; }
+.be-attack-dmg.as-link, .be-attack-bonus.as-link { border: 1px dashed transparent; border-bottom: 1px dashed currentColor; background: rgba(255,255,255,.03); font-family: var(--font); cursor: pointer; border-radius: 7px; padding: 2px 7px; transition: border-color .15s, background .15s; }
+.be-attack-dmg.as-link { color: var(--fear); font-size: 13px; font-weight: 800; margin-left: auto; }
+.be-attack-bonus.as-link { color: var(--muted); font-size: 10.5px; }
+.be-attack-dmg.as-link:hover { border-color: var(--fear); background: rgba(255,92,138,.12); }
+.be-attack-bonus.as-link:hover { border-color: var(--accent); background: rgba(139,124,255,.12); color: var(--text); }
+.be-attack-extra { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--line); }
+.be-roll-hint { font-size: 10px; color: var(--muted); line-height: 1.5; }
+.be-roll-links { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
+.be-roll-links.compact { margin: 5px 0 2px; }
+.be-roll-link { font-family: var(--font); font-size: 10.5px; font-weight: 700; padding: 4px 8px; border-radius: 7px; border: 1px solid var(--line); background: var(--bg-3); color: var(--text); cursor: pointer; }
+.be-roll-link:hover { border-color: var(--accent); }
+.be-roll-link.hit { color: #c3baff; border-color: rgba(139,124,255,.45); }
+.be-roll-link.dmg { color: #ff9dbb; border-color: rgba(255,92,138,.45); }
+.be-roll-link.both { color: var(--gold); border-color: rgba(255,206,92,.35); background: transparent; }
+
+/* ---- draggable floating card ---- */
+.be-card-top { cursor: grab; user-select: none; touch-action: none; gap: 6px; }
+.be-card-top.dragging { cursor: grabbing; }
+.be-drag-grip { font-size: 15px; color: var(--muted); line-height: 1; cursor: grab; }
+.be-card-top .be-avatar-tag { max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.be-docks { display: flex; gap: 2px; flex: 0 0 auto; }
+.be-dock { width: 20px; height: 20px; padding: 0; border-radius: 5px; border: 1px solid var(--line); background: var(--bg-3); color: var(--muted); font-size: 10px; line-height: 1; cursor: pointer; }
+.be-dock:hover { color: var(--text); border-color: var(--accent); }
+.be-card-diff-tip { font-size: 10px; color: var(--muted); white-space: nowrap; }
+.be-card-empty .be-btn { margin-top: 4px; }

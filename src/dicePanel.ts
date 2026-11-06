@@ -35,16 +35,23 @@ import {
 } from './rollLog';
 import { getForced, setForced, takeForced, isPersisted, FORCE_MIN, FORCE_MAX } from './force';
 import { fearBoard, refreshFearBoards } from './fearBoard';
-import { getDifficulty, setDifficulty, onDifficulty } from './difficulty';
+import { getLocalDifficulty, setLocalDifficulty, onLocalDifficulty } from './localDifficulty';
+import {
+  getQuickRolls, onQuickRollsChange, removeQuickRoll, clearQuickRolls,
+  criticalExtra, damageFormula, newQuickId,
+  type QuickRoll, type DamageDice,
+} from './quickRolls';
 import type { DualityResult, Quadrant, Role } from './types';
 
-/** Live subscription to the GM's shared difficulty (one panel exists at a time). */
+/** Subscriptions live outside `refresh()` so tab switches never stack them up. */
 let offDiff: (() => void) | null = null;
+let offQuick: (() => void) | null = null;
 
 export function renderDicePanel(root: HTMLElement, role: Role) {
   clear(root);
   resetRollLogListeners();
   setLocalRole(role);
+  offQuick?.();
 
   // ---- sub tab state ----
   // `?sub=duality` only matters for local previews/debugging inside a plain browser.
@@ -58,6 +65,13 @@ export function renderDicePanel(root: HTMLElement, role: Role) {
 
   const body = el('div', { class: 'panel-body' });
   const logSlot = el('div');
+  const quickSlot = el('div');
+
+  function paintQuick() {
+    clear(quickSlot);
+    quickSlot.append(quickRollsView(role));
+  }
+  offQuick = onQuickRollsChange(paintQuick);
 
   function refresh() {
     polyBtn.className = 'subtab' + (sub === 'poly' ? ' active' : '');
@@ -68,9 +82,10 @@ export function renderDicePanel(root: HTMLElement, role: Role) {
 
     clear(logSlot);
     logSlot.append(rollLogView(role));
+    paintQuick();
   }
 
-  root.append(subBar, body, logSlot);
+  root.append(quickSlot, subBar, body, logSlot);
   // The GM's Fear board sits above the tabs so it stays visible on both dice views.
   if (role === 'GM') root.prepend(fearBoard());
   refresh();
@@ -300,40 +315,36 @@ function dualityView(role: Role) {
     el('option', { value: 'disadvantage' }, '劣势 (-d6)'),
   );
 
-  // Difficulty: the GM owns it, every player rolls against the shared value.
+  // Per-client difficulty: nothing is published to the room and nobody receives
+  // a GM-owned value. Both GM and players type their own number when they need
+  // a success / fail verdict; empty means "only resolve Hope vs Fear".
   const diffInput = el('input', { class: 'input', type: 'number', placeholder: '如 10、15（留空则只判希望/恐惧）' });
-  const diffRead = el('div', { class: 'diff-read' });
   const diffState = el('div', { class: 'link-note diff-note' }, '');
   const blindChk = el('input', { type: 'checkbox' });
 
-  const initialDiff = getDifficulty();
-  if (isGM && initialDiff != null) diffInput.value = String(initialDiff);
+  const initialDiff = getLocalDifficulty();
+  if (initialDiff != null) diffInput.value = String(initialDiff);
 
   function paintDiff(v: number | null) {
     if (v == null) {
-      diffRead.textContent = 'GM 尚未设定难度 · 本次只判希望 / 恐惧走向';
-      diffRead.className = 'diff-read off';
-      diffState.textContent = '未设难度 · 玩家端只判希望 / 恐惧走向';
+      diffState.textContent = '未填难度 · 本次只判希望 / 恐惧走向';
       diffState.className = 'link-note diff-note';
     } else {
-      diffRead.textContent = `难度 ${v} · 实时同步自 GM`;
-      diffRead.className = 'diff-read on';
-      diffState.textContent = `✔ 已同步给玩家 · 难度 ${v}`;
+      diffState.textContent = `本地难度 ${v} · 只用于你这台机器的判定`;
       diffState.className = 'link-note diff-note on';
     }
   }
   paintDiff(initialDiff);
 
-  // GM edits publish instantly; players only ever mirror the published value.
   diffInput.addEventListener('input', () => {
     const raw = diffInput.value.trim();
     const n = raw === '' ? null : parseInt(raw, 10);
-    setDifficulty(Number.isFinite(n as number) ? (n as number) : null);
+    setLocalDifficulty(Number.isFinite(n as number) ? (n as number) : null);
   });
 
   offDiff?.();
-  offDiff = onDifficulty((v) => {
-    if (isGM && v != null && diffInput.value.trim() === '') diffInput.value = String(v);
+  offDiff = onLocalDifficulty((v) => {
+    if (v != null && diffInput.value.trim() === '') diffInput.value = String(v);
     paintDiff(v);
   });
 
@@ -360,8 +371,8 @@ function dualityView(role: Role) {
     const bonus = expBonus();
     const modifier = base + bonus;
     const blind = isGM && blindChk.checked;
-    // Everyone rolls against the difficulty the GM published.
-    const difficulty = getDifficulty() ?? undefined;
+    // Local difficulty only — never shared with the rest of the table.
+    const difficulty = getLocalDifficulty() ?? undefined;
 
     // 指定点数：二元骰都是 d12，够用才消耗
     const maxSides = 12;
@@ -463,7 +474,7 @@ function dualityView(role: Role) {
         `希望 ${res.hope} + 恐惧 ${res.fear}` +
         (base ? ` + 属性 ${sign(base)}` : '') +
         (bonus ? ` + 经历「${expName()}」+2` : '') +
-        (difficulty != null ? ` → 对抗难度 ${difficulty}（${res.success ? '成功' : '失败'}）` : '') +
+        (difficulty != null ? ` → 本地难度 ${difficulty}（${res.success ? '成功' : '失败'}）` : '') +
         (settleNote ? ` ｜ ${settleNote}` : ''),
     });
   }
@@ -472,18 +483,18 @@ function dualityView(role: Role) {
     el('p', { class: 'hint' },
       isGM
         ? '投掷希望 d12 与恐惧 d12，加上属性调整值与相关经历。较高的那颗决定叙事走向；双骰相同即为大成功。'
-        : '选择属性会自动带入你角色卡上的加值；若某段经历适用于这次判定，选中它可再 +2。难度由 GM 裁定。'),
+        : '选择属性会自动带入你角色卡上的加值；若某段经历适用于这次判定，选中它可再 +2。本地难度自己填，只影响你自己的判定。'),
     field('属性 (Trait) · 联动角色卡', traitSel),
     linkNote,
     field('调整值 (Modifier)', modInput),
     field('经历 (Experience) · 适用则 +2', expSel),
     expNote,
     field('优势 / 劣势', rollWith),
-    isGM ? field('难度 (Difficulty)', diffInput) : field('对抗难度 (Difficulty) · 由 GM 制定', diffRead),
-    isGM ? diffState : null,
+    field('本地难度 (Difficulty) · 仅本机，不同步', diffInput),
+    diffState,
     isGM
       ? el('label', { class: 'check blind-check' }, blindChk, el('span', {}, '🔒 暗骰 · 仅 GM 可见(玩家端不显示)'))
-      : el('div', { class: 'hint lock-hint' }, '🔒 难度由 GM 设定，会实时同步到你这边；暗骰仅 GM 可见。'),
+      : el('div', { class: 'hint lock-hint' }, '🔒 暗骰仅 GM 可见。本地难度不会同步给其他人。'),
     el('div', { class: 'opt-row' },
       el('label', { class: 'check' }, autoChk, el('span', {}, '自动结算希望 / 恐惧')),
       el('label', { class: 'check' + (appState.embedded ? '' : ' disabled') }, tableChk,
@@ -505,7 +516,7 @@ function outcomeTitle(res: DualityResult): string {
   const side = res.outcome === 'hope' ? '希望' : '恐惧';
   const q = quadrantFor(res);
   if (q) return quadrantInfo(q)?.title ?? side;
-  return `${side}（未设难度）`;
+  return `${side}（未填难度）`;
 }
 
 function dualityResultCard(
@@ -541,7 +552,7 @@ function dualityResultCard(
       el('div', { class: 'outcome-desc' }, pickSub(info.subs)),
     ));
     if (active === null) {
-      card.append(el('div', { class: 'no-diff' }, '未设置难度：本次只判希望 / 恐惧走向，具体成败由 GM 裁定。'));
+      card.append(el('div', { class: 'no-diff' }, '未填本地难度：本次只判希望 / 恐惧走向，具体成败由 GM 裁定。'));
     }
   }
 
@@ -570,7 +581,7 @@ function dualityResultCard(
   calc.append(el('div', { class: 'calc-total' }, `总计 = ${res.total}`));
   if (res.difficulty != null) {
     calc.append(el('div', { class: 'calc-line' },
-      `对抗难度 ${res.difficulty} → `,
+      `本地难度 ${res.difficulty} → `,
       el('b', { class: res.success ? 'ok' : 'bad' }, res.success ? '成功' : '失败'),
     ));
   }
@@ -724,6 +735,208 @@ function polyView(role: Role) {
     resultBox,
   );
   return wrap;
+}
+
+// ---------------------------------------------------------------- quick rolls from the bestiary
+
+type HitMode = 'none' | 'advantage' | 'disadvantage';
+interface QuickState { mode: HitMode; critical: boolean }
+/** Survives a tab switch, which rebuilds the whole queue DOM. */
+const quickState = new Map<string, QuickState>();
+function stateFor(id: string): QuickState {
+  let s = quickState.get(id);
+  if (!s) { s = { mode: 'none', critical: false }; quickState.set(id, s); }
+  return s;
+}
+
+function quickRollsView(_role: Role) {
+  const wrap = el('div', { class: 'quick-box' });
+  const list = getQuickRolls();
+  wrap.append(el('div', { class: 'quick-head' },
+    el('span', {}, '⚔ 怪物卡快捷投掷'),
+    list.length ? el('button', { class: 'quick-clear', onclick: () => clearQuickRolls() }, '清空') : null,
+  ));
+  if (!list.length) {
+    wrap.append(el('div', { class: 'quick-empty' },
+      '在怪物图鉴里点「命中 +1」或「1d8+3 物理」，对应的骰子组合会自动送到这里。'));
+    return wrap;
+  }
+  for (const q of list) wrap.append(quickItem(q));
+  return wrap;
+}
+
+function quickItem(q: QuickRoll) {
+  const st = stateFor(q.id);
+  const box = el('div', { class: 'quick-item' });
+  const result = el('div', { class: 'quick-result' });
+  const modeNote = el('div', { class: 'quick-note' });
+  const critNote = el('div', { class: 'quick-note' });
+
+  function paintNotes() {
+    modeNote.textContent = q.kind === 'attack'
+      ? st.mode === 'none'
+        ? '匕首之心 · 敌人命中掷 1d20；优势/劣势时额外掷一颗 d20 取高/低。'
+        : `匕首之心 · NPC ${st.mode === 'advantage' ? '优势' : '劣势'}：掷 2d20 取${st.mode === 'advantage' ? '最高' : '最低'}。`
+      : '';
+    critNote.textContent = q.kind === 'damage'
+      ? st.critical
+        ? `重击规则：照常掷 ${damageFormula(q.dice!)}，再额外加伤害骰最大值之和 ${criticalExtra(q.dice!)}（调整值只算一次）。`
+        : `普通伤害：${damageFormula(q.dice!)}。重击按匕首之心规则额外加「所有伤害骰的最大值」。`
+      : '';
+  }
+  paintNotes();
+
+  box.append(el('div', { class: 'quick-top' },
+    el('div', { class: 'quick-label' },
+      el('span', { class: 'quick-kind ' + q.kind }, q.kind === 'attack' ? '命中' : '伤害'),
+      el('b', {}, q.label),
+    ),
+    el('button', { class: 'quick-x', title: '从队列移除', onclick: () => removeQuickRoll(q.id) }, '×'),
+  ));
+  box.append(el('div', { class: 'quick-src' }, q.source));
+
+  if (q.kind === 'attack') {
+    const modes: [HitMode, string][] = [['none', '普通'], ['advantage', '优势'], ['disadvantage', '劣势']];
+    const modeBtns: HTMLButtonElement[] = [];
+    for (const [m, label] of modes) {
+      const b = el('button', {
+        class: 'quick-mode' + (st.mode === m ? ' active' : ''),
+        onclick: () => {
+          st.mode = m;
+          modeBtns.forEach(x => x.classList.toggle('active', x.dataset.mode === m));
+          paintNotes();
+          playSfx('click');
+        },
+      }, label) as HTMLButtonElement;
+      b.dataset.mode = m;
+      modeBtns.push(b);
+    }
+    box.append(el('div', { class: 'quick-row' }, ...modeBtns,
+      el('button', { class: 'btn primary quick-go', onclick: () => void doQuickAttack(q, st, result) }, '🎲 投掷命中')),
+      modeNote);
+  } else if (q.dice) {
+    const critBtn = el('button', {
+      class: 'quick-mode crit' + (st.critical ? ' active' : ''),
+      onclick: () => {
+        st.critical = !st.critical;
+        critBtn.classList.toggle('active', st.critical);
+        critBtn.textContent = st.critical ? '💥 重击 · 开' : '💥 重击 · 关';
+        paintNotes();
+        playSfx('click');
+      },
+    }, st.critical ? '💥 重击 · 开' : '💥 重击 · 关');
+    box.append(el('div', { class: 'quick-row' }, critBtn,
+      el('button', { class: 'btn primary quick-go', onclick: () => void doQuickDamage(q, st, result) }, '🎲 投掷伤害')),
+      critNote);
+  }
+
+  box.append(result);
+  return box;
+}
+
+function quickAuthor() {
+  return appState.playerName || (appState.role === 'GM' ? 'GM' : '玩家');
+}
+
+async function doQuickAttack(q: QuickRoll, st: QuickState, result: HTMLElement) {
+  const bonus = q.bonus ?? 0;
+  const count = st.mode === 'none' ? 1 : 2;
+  const r = rollPolyhedral(20, count, 0);
+  const kept = st.mode === 'advantage' ? Math.max(...r.rolls)
+    : st.mode === 'disadvantage' ? Math.min(...r.rolls) : r.rolls[0];
+  const total = kept + bonus;
+  const nat = kept === 20 ? 'nat20' : kept === 1 ? 'nat1' : null;
+
+  clear(result);
+  const stage = diceStage();
+  result.append(stage.wrap);
+  playSfx('tumble');
+  await animateDice(stage.canvas, r.rolls.map(v => ({ value: v, sides: 20, color: '#8b7cff' })),
+    { onBounce: () => playSfx('bounce') });
+  playSfx(nat ?? 'bounce');
+
+  const card = el('div', { class: 'result-card quick-card' });
+  const row = el('div', { class: 'dice-row wrap' });
+  for (const v of r.rolls) row.append(dieBox('d20', v, 'plain'));
+  card.append(row);
+  if (nat === 'nat20') {
+    card.append(el('div', { class: 'nat-badge nat-20' }, '✦ 天然 20 · 关键成功 → 这一击的伤害可以勾选「重击」'));
+  } else if (nat === 'nat1') {
+    card.append(el('div', { class: 'nat-badge nat-1' }, '✧ 天然 1 · 大失败'));
+  }
+  const calc = el('div', { class: 'calc' });
+  calc.append(el('div', { class: 'calc-line' }, st.mode === 'none'
+    ? `1d20 → ${kept}`
+    : `2d20 ${r.rolls.join(' / ')} → 取${st.mode === 'advantage' ? '高' : '低'} ${kept}`));
+  calc.append(el('div', { class: 'calc-line' }, `命中加值 ${bonus >= 0 ? '+' : ''}${bonus}`));
+  calc.append(el('div', { class: 'calc-total' }, `命中合计 = ${total}`));
+  card.append(calc);
+  result.append(card);
+  holdStage(stage.wrap, 2600);
+
+  pushRoll({
+    id: newId(), ts: Date.now(), author: quickAuthor(),
+    color: appState.playerColor || '#8b7cff', gmOnly: false, kind: 'poly',
+    summary: `${q.source} · 命中 ${total}${nat === 'nat20' ? ' · 天然 20' : nat === 'nat1' ? ' · 天然 1' : ''}`,
+    detail: `${st.mode === 'none' ? '1d20' : `2d20 取${st.mode === 'advantage' ? '高' : '低'}`} ${kept} + ${bonus} ｜ ${q.label}`,
+  });
+}
+
+async function doQuickDamage(q: QuickRoll, st: QuickState, result: HTMLElement) {
+  const d: DamageDice | undefined = q.dice;
+  if (!d) return;
+  const extra = st.critical ? criticalExtra(d) : 0;
+  let rolls: number[] = [];
+  let base = 0;
+  if (d.count > 0) {
+    const r = rollPolyhedral(d.sides, d.count, d.modifier);
+    rolls = r.rolls;
+    base = r.total;
+  } else {
+    base = d.flat + d.modifier;
+  }
+  const total = base + extra;
+
+  clear(result);
+  let stage: { wrap: HTMLElement; canvas: HTMLCanvasElement } | null = null;
+  if (rolls.length) {
+    stage = diceStage();
+    result.append(stage.wrap);
+    playSfx('tumble');
+    await animateDice(stage.canvas, rolls.slice(0, 6).map(v => ({ value: v, sides: d.sides, color: '#ff8fb0' })),
+      { onBounce: () => playSfx('bounce') });
+    playSfx('bounce');
+  }
+
+  const card = el('div', { class: 'result-card quick-card' });
+  if (rolls.length) {
+    const row = el('div', { class: 'dice-row wrap' });
+    for (const v of rolls) row.append(dieBox(`d${d.sides}`, v, 'plain'));
+    card.append(row);
+  }
+  const calc = el('div', { class: 'calc' });
+  calc.append(el('div', { class: 'calc-line' }, rolls.length
+    ? `${damageFormula(d)} → ${rolls.join(' + ')}${d.modifier ? ` + ${d.modifier}` : ''} = ${base}`
+    : `${damageFormula(d)} → 固定伤害 ${base}`));
+  if (extra) {
+    calc.append(el('div', { class: 'calc-line crit-line' },
+      `💥 匕首之心重击：额外加伤害骰最大值之和 ${d.count} × ${d.sides} = ${extra}（调整值不重复计算）`));
+  } else if (st.critical) {
+    calc.append(el('div', { class: 'calc-line' }, '固定伤害没有伤害骰，重击不额外加成。'));
+  }
+  calc.append(el('div', { class: 'calc-total' }, `伤害合计 = ${total}`));
+  card.append(calc);
+  result.append(card);
+  if (stage) holdStage(stage.wrap, 2600);
+
+  pushRoll({
+    id: newId(), ts: Date.now(), author: quickAuthor(),
+    color: appState.playerColor || '#8b7cff', gmOnly: false, kind: 'poly',
+    summary: `${q.source} · ${damageFormula(d)} = ${total}${extra ? ' · 重击' : ''}`,
+    detail: rolls.length
+      ? `${rolls.join(' + ')}${d.modifier ? ` + ${d.modifier}` : ''}${extra ? ` + 重击 ${extra}` : ''} = ${total} ｜ ${q.label}`
+      : `固定伤害 ${base}${extra ? ` + 重击 ${extra}` : ''} = ${total} ｜ ${q.label}`,
+  });
 }
 
 // ---------------------------------------------------------------- shared log

@@ -468,3 +468,33 @@ select.input { cursor: pointer; }
 .dmg-result.ok { color: var(--ok); background: rgba(76,208,125,0.10); border: 1px solid rgba(76,208,125,0.5); }
 .dmg-result.warn { color: var(--gold); background: rgba(255,206,92,0.10); border: 1px solid rgba(255,206,92,0.5); }
 .dmg-result.bad { color: var(--bad); background: rgba(255,107,107,0.10); border: 1px solid rgba(255,107,107,0.5); }
+
+/* ---- quick rolls pushed from the GM bestiary ---- */
+.quick-box { margin: 8px 10px 2px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg-2); overflow: hidden; }
+.quick-head { display: flex; align-items: center; gap: 8px; padding: 7px 10px; font-size: 11.5px; font-weight: 800; color: #c6bfff; border-bottom: 1px solid var(--line); background: rgba(139,124,255,0.07); }
+.quick-head > span { flex: 1; }
+.quick-clear { border: none; background: transparent; color: var(--muted); font-size: 10.5px; text-decoration: underline; }
+.quick-clear:hover { color: var(--bad); }
+.quick-empty { padding: 7px 10px 9px; font-size: 10.5px; color: var(--muted); line-height: 1.6; }
+.quick-item { padding: 8px 10px; border-bottom: 1px dashed var(--line); }
+.quick-item:last-child { border-bottom: none; }
+.quick-top { display: flex; align-items: center; gap: 8px; }
+.quick-label { flex: 1; min-width: 0; display: flex; align-items: center; gap: 7px; font-size: 12.5px; }
+.quick-label b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.quick-kind { font-size: 9.5px; font-weight: 800; padding: 1px 6px; border-radius: 20px; white-space: nowrap; border: 1px solid transparent; }
+.quick-kind.attack { color: #b7adff; background: rgba(139,124,255,0.16); border-color: rgba(139,124,255,0.4); }
+.quick-kind.damage { color: #ff96b4; background: rgba(255,92,138,0.14); border-color: rgba(255,92,138,0.4); }
+.quick-x { border: none; background: transparent; color: var(--muted); font-size: 17px; line-height: 1; padding: 0 3px; }
+.quick-x:hover { color: var(--bad); }
+.quick-src { font-size: 10px; color: var(--muted); margin: 1px 0 6px; }
+.quick-row { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
+.quick-mode { font-size: 10.5px; font-weight: 700; padding: 5px 10px; border-radius: 7px; border: 1px solid var(--line); background: var(--bg-3); color: var(--muted); }
+.quick-mode:hover { color: var(--text); border-color: var(--accent); }
+.quick-mode.active { background: rgba(139,124,255,0.2); border-color: var(--accent); color: #d6d0ff; }
+.quick-mode.crit.active { background: rgba(255,92,138,0.18); border-color: var(--fear); color: #ffb3c8; }
+.quick-go { margin-left: auto; padding: 5px 10px !important; font-size: 10.5px !important; }
+.quick-note { font-size: 10px; color: var(--muted); line-height: 1.55; margin-top: 5px; width: 100%; }
+.quick-result:empty { display: none; }
+.quick-result { margin-top: 7px; }
+.quick-card { margin-top: 0 !important; }
+.crit-line { color: var(--gold); }

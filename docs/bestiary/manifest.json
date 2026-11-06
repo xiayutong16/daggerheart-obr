@@ -1,8 +1,8 @@
 {
   "name": "匕首之心 · 怪物图鉴 (GM)",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "manifest_version": 1,
-  "description": "匕首之心 GM 专用怪物图鉴：139 条核心规则书敌人、特性检索、遭遇追踪与对抗难度联动；右键头像可绑定怪物并快捷查看怪物卡。",
+  "description": "匕首之心 GM 专用怪物图鉴：139 条核心规则书敌人、特性检索、遭遇追踪；右键绑定头像、左键自动弹出可拖动怪物卡，点攻击数值一键送骰到投掷面板。",
   "icon": "https://xiayutong16.github.io/daggerheart-obr/bestiary/icon.svg",
   "author": "xiayutong16",
   "action": {
